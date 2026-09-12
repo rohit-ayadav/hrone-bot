@@ -7,7 +7,7 @@ function getSecretKey(): Buffer {
   if (!secret) {
     throw new Error('ENCRYPTION_KEY is not defined');
   }
-  if (secret.length !== 64) {
+  if (secret.length < 12) {
     throw new Error('ENCRYPTION_KEY must be 64 characters long');
   }
   return crypto.createHash('sha256').update(secret).digest();
