@@ -20,6 +20,11 @@ export async function POST(request: Request) {
                 await handleStatusRequest(chatId);
             } else if (data === 'action_history') {
                 await handleHistoryRequest(chatId);
+            } else if (data === 'action_pick_date') {
+                await handleDatePickerRequest(chatId);
+            } else if (data.startsWith('action_hist_day_')) {
+                const dayNum = data.replace('action_hist_day_', '');
+                await handleHistoryRequest(chatId, dayNum);
             } else if (data === 'action_skip') {
                 await handleSkipRequest(chatId);
             }
@@ -43,14 +48,19 @@ export async function POST(request: Request) {
         } else if (text.startsWith('/history')) {
             const parts = text.split(' ');
             const dateParam = parts.slice(1).join(' ').trim();
-            await handleHistoryRequest(chatId, dateParam);
+            if (!dateParam) {
+                // If user just typed /history without date, show the day picker buttons!
+                await handleDatePickerRequest(chatId);
+            } else {
+                await handleHistoryRequest(chatId, dateParam);
+            }
         } else if (text.startsWith('/start') || text.startsWith('/help')) {
             await handleHelpRequest(chatId);
         } else {
             // Unrecognized text command, reply with help options
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance, /history to view logs, or /status for system state.`,
+                `Send /mark to punch attendance, /history to pick date history, or /status for system state.`,
                 chatId,
                 getInteractiveKeyboard()
             );
@@ -130,6 +140,19 @@ async function handleMarkAttendance(chatId: string | number) {
     }
 }
 
+async function handleDatePickerRequest(chatId: string | number) {
+    const now = new Date();
+    const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthLabel = `${monthNames[istDate.getMonth()]} ${istDate.getFullYear()}`;
+
+    const pickerText =
+        `📅 <b>Select Day for History (${monthLabel})</b>\n\n` +
+        `Tap any day number (1 – 31) below to view its full attendance history & raw punch logs:`;
+
+    await sendTelegramMessage(pickerText, chatId, getDatePickerKeyboard());
+}
+
 async function handleHistoryRequest(chatId: string | number, dateInput?: string) {
     const targetDate = normalizeDateInput(dateInput);
     const dateLabel = targetDate || 'today';
@@ -201,13 +224,43 @@ async function handleHelpRequest(chatId: string | number) {
         `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
         `Available Telegram Controls:\n\n` +
         `• /mark - Punch attendance\n` +
-        `• /history - View today's attendance & raw punch logs\n` +
-        `• /history 2026-09-11 - View logs for specific date\n` +
+        `• /history - Open day picker (1-31) or view today's logs\n` +
         `• /history 11 - View logs for 11th of current month\n` +
+        `• /history 2026-09-11 - View logs for specific date\n` +
         `• /status - View current IST time & shift mode\n` +
         `• /help - Display this menu`;
 
     await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard());
+}
+
+function getDatePickerKeyboard() {
+    const now = new Date();
+    const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const year = istDate.getFullYear();
+    const month = istDate.getMonth() + 1;
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    const rows: any[] = [];
+    let currentRow: any[] = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        currentRow.push({
+            text: `${day}`,
+            callback_data: `action_hist_day_${day}`
+        });
+
+        if (currentRow.length === 7 || day === daysInMonth) {
+            rows.push(currentRow);
+            currentRow = [];
+        }
+    }
+
+    rows.push([
+        { text: '📍 Today\'s Logs', callback_data: 'action_history' },
+        { text: 'ℹ️ System Status', callback_data: 'action_status' }
+    ]);
+
+    return { inline_keyboard: rows };
 }
 
 function getInteractiveKeyboard() {
@@ -215,10 +268,11 @@ function getInteractiveKeyboard() {
         inline_keyboard: [
             [
                 { text: '📍 Punch Attendance Now', callback_data: 'action_mark' },
-                { text: '📊 Attendance History', callback_data: 'action_history' }
+                { text: '📊 Today Logs', callback_data: 'action_history' }
             ],
             [
-                { text: 'ℹ️ Check System Status', callback_data: 'action_status' }
+                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
+                { text: 'ℹ️ System Status', callback_data: 'action_status' }
             ]
         ]
     };
@@ -229,7 +283,7 @@ function getFailureKeyboard() {
         inline_keyboard: [
             [
                 { text: '🔄 Retry Punch Now', callback_data: 'action_mark' },
-                { text: '📊 Attendance History', callback_data: 'action_history' }
+                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' }
             ],
             [
                 { text: 'ℹ️ Check System Status', callback_data: 'action_status' }
