@@ -110,16 +110,30 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Live IST Clock */}
-          <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-xl px-4 py-2.5 flex flex-col items-start sm:items-end shadow-sm">
-            <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
-              <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          {/* Action & Live IST Clock */}
+          <div className="flex items-center gap-3">
+            <a
+              href="https://t.me/rohit_hrone_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all shadow-sm"
+            >
+              <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                <path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.28c-.15.65-.54.81-1.08.5l-3.01-2.22-1.45 1.4c-.16.16-.3.3-.61.3l.22-3.05 5.56-5.02c.24-.22-.05-.34-.37-.13l-6.87 4.33-2.96-.92c-.64-.2-.65-.64.13-.95l11.57-4.46c.53-.2.99.12.84.94z"/>
               </svg>
-              <span>IST Time (Asia/Kolkata)</span>
-            </div>
-            <div className="text-sm font-mono font-semibold text-slate-100 mt-0.5">
-              {istTime || 'Loading time...'}
+              <span>Launch @rohit_hrone_bot</span>
+            </a>
+
+            <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-xl px-4 py-2 flex flex-col items-start sm:items-end shadow-sm">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
+                <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>IST Time (Asia/Kolkata)</span>
+              </div>
+              <div className="text-xs font-mono font-semibold text-slate-100 mt-0.5">
+                {istTime || 'Loading time...'}
+              </div>
             </div>
           </div>
         </header>
