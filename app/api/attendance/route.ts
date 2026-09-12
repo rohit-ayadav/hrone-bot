@@ -101,48 +101,82 @@ export async function GET(request: Request) {
                     result,
                 });
             } catch (userErr: any) {
-                console.error(`Failed to mark attendance for user ${user.hrUsername}:`, userErr);
+                console.error(`Automated punch status for user ${user.hrUsername}:`, userErr.message);
+
+                const isSkipReason = userErr.message && (
+                    userErr.message.includes('Already Punched Out') ||
+                    userErr.message.includes('Minimum 9 working hours required') ||
+                    userErr.message.includes('Check-In recorded today')
+                );
 
                 const now = new Date();
                 const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toLocaleString('en-IN');
 
-                const failureMessage =
-                    `🚨 <b>Automated Attendance Failed!</b>\n\n` +
-                    `<b>Account:</b> ${user.hrUsername}\n` +
-                    `<b>Error:</b> ${userErr.message || 'Unknown error'}\n` +
-                    `<b>Timestamp:</b> ${istTime} (IST)\n` +
-                    `<b>Domain:</b> ${user.domainCode || 'uharvest'}\n\n` +
-                    (userErr.stack ? `<b>Stack Trace:</b>\n<pre><code>${userErr.stack.substring(0, 800)}</code></pre>` : '');
+                if (isSkipReason) {
+                    const skipMessage =
+                        `ℹ️ <b>Automated Attendance Check (Skipped)</b>\n\n` +
+                        `<b>Account:</b> ${user.hrUsername}\n` +
+                        `<b>Note:</b> ${userErr.message}\n` +
+                        `<b>Checked At:</b> ${istTime} (IST)`;
 
-                if (user.chatId) {
-                    await AttendanceLog.create({
+                    if (user.chatId) {
+                        await sendTelegramMessage(
+                            skipMessage,
+                            user.chatId,
+                            {
+                                inline_keyboard: [
+                                    [{ text: '📍 Punch Attendance Now', callback_data: 'action_mark' }],
+                                    [{ text: '📊 Today Logs', callback_data: 'action_history' }]
+                                ]
+                            }
+                        );
+                    }
+
+                    results.push({
                         chatId: user.chatId,
-                        hrUsername: user.hrUsername,
-                        action: (new Date().getHours() < 14 ? 'In' : 'Out'),
-                        punchTime: new Date().toISOString(),
-                        status: 'FAILED',
-                        source: 'AUTOMATED_CRON',
-                        errorMessage: userErr.message || 'Unknown error',
+                        username: user.hrUsername,
+                        status: 'skipped',
+                        reason: userErr.message,
                     });
+                } else {
+                    const failureMessage =
+                        `🚨 <b>Automated Attendance Failed!</b>\n\n` +
+                        `<b>Account:</b> ${user.hrUsername}\n` +
+                        `<b>Error:</b> ${userErr.message || 'Unknown error'}\n` +
+                        `<b>Timestamp:</b> ${istTime} (IST)\n` +
+                        `<b>Domain:</b> ${user.domainCode || 'uharvest'}\n\n` +
+                        (userErr.stack ? `<b>Stack Trace:</b>\n<pre><code>${userErr.stack.substring(0, 800)}</code></pre>` : '');
 
-                    await sendTelegramMessage(
-                        failureMessage,
-                        user.chatId,
-                        {
-                            inline_keyboard: [
-                                [{ text: '🔄 Retry Punch Now', callback_data: 'action_mark' }],
-                                [{ text: 'ℹ️ Check System Status', callback_data: 'action_status' }]
-                            ]
-                        }
-                    );
+                    if (user.chatId) {
+                        await AttendanceLog.create({
+                            chatId: user.chatId,
+                            hrUsername: user.hrUsername,
+                            action: (new Date().getHours() < 14 ? 'In' : 'Out'),
+                            punchTime: new Date().toISOString(),
+                            status: 'FAILED',
+                            source: 'AUTOMATED_CRON',
+                            errorMessage: userErr.message || 'Unknown error',
+                        });
+
+                        await sendTelegramMessage(
+                            failureMessage,
+                            user.chatId,
+                            {
+                                inline_keyboard: [
+                                    [{ text: '🔄 Retry Punch Now', callback_data: 'action_mark' }],
+                                    [{ text: 'ℹ️ Check System Status', callback_data: 'action_status' }]
+                                ]
+                            }
+                        );
+                    }
+
+                    results.push({
+                        chatId: user.chatId,
+                        username: user.hrUsername,
+                        status: 'failed',
+                        error: userErr.message,
+                    });
                 }
-
-                results.push({
-                    chatId: user.chatId,
-                    username: user.hrUsername,
-                    status: 'failed',
-                    error: userErr.message,
-                });
             }
         }
 

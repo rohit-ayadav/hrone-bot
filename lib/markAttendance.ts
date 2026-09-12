@@ -182,7 +182,9 @@ export async function markAttendance(
 
     // 3. Query today's HRone attendance status to check 9-hour shift rule
     let firstPunchDate: Date | null = null;
-    let hasPunchedToday = false;
+    let hasPunchedInToday = false;
+    let hasPunchedOutToday = false;
+    let timeOutStr: string | null = null;
 
     const queryHeaders = {
         'accept': 'application/json, text/plain, */*',
@@ -207,16 +209,30 @@ export async function markAttendance(
         const daySummary = Array.isArray(daywiseData) && daywiseData.length > 0 ? daywiseData[0] : null;
 
         if (Array.isArray(rawPunchData) && rawPunchData.length > 0) {
-            hasPunchedToday = true;
+            hasPunchedInToday = true;
             const first = rawPunchData[0];
             if (first && first.punchDateTime) {
                 firstPunchDate = parseTimeStringToDate(todayStr, first.punchDateTime);
             }
+            if (rawPunchData.length >= 2) {
+                hasPunchedOutToday = true;
+                const last = rawPunchData[rawPunchData.length - 1];
+                if (last && last.punchDateTime) {
+                    timeOutStr = last.punchDateTime.substring(11, 16);
+                }
+            }
         }
 
-        if (!firstPunchDate && daySummary && daySummary.timeIn && daySummary.timeIn !== 'Not Punched' && daySummary.timeIn !== '00:00') {
-            hasPunchedToday = true;
-            firstPunchDate = parseTimeStringToDate(todayStr, daySummary.timeIn);
+        const checkInVal = daySummary?.timeIn || daySummary?.timein;
+        if (!firstPunchDate && checkInVal && checkInVal !== 'Not Punched' && checkInVal !== '00:00') {
+            hasPunchedInToday = true;
+            firstPunchDate = parseTimeStringToDate(todayStr, checkInVal);
+        }
+
+        const checkOutVal = daySummary?.timeOut || daySummary?.timeout;
+        if (checkOutVal && checkOutVal !== 'Not Punched' && checkOutVal !== '00:00') {
+            hasPunchedOutToday = true;
+            if (!timeOutStr) timeOutStr = checkOutVal;
         }
     } catch (e) {
         console.error('Warning: Failed to fetch today attendance state before punching:', e);
@@ -227,10 +243,14 @@ export async function markAttendance(
 
     if (overrideAction) {
         action = overrideAction;
-    } else if (!hasPunchedToday || !firstPunchDate) {
+    } else if (!hasPunchedInToday || !firstPunchDate) {
         action = 'In';
+    } else if (hasPunchedOutToday) {
+        throw new Error(
+            `Already Punched Out today (Recorded at ${timeOutStr || 'earlier today'}). No further automated punch required.`
+        );
     } else {
-        // User has already checked in today! Check if 9 hours have elapsed.
+        // User has checked in today, but not checked out! Check if 9 hours have elapsed.
         const elapsedMs = istDate.getTime() - firstPunchDate.getTime();
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
 
