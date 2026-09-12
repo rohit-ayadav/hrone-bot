@@ -269,9 +269,13 @@ export default function Home() {
               
               <div className="space-y-3 text-xs">
                 <div>
-                  <span className="text-slate-400 block mb-1">Cron Webhook URL</span>
-                  <div className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl font-mono text-[11px] text-emerald-400 break-all">
+                  <span className="text-slate-400 block mb-1">Automated Punch Webhook</span>
+                  <div className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl font-mono text-[11px] text-emerald-400 break-all mb-2">
                     GET /api/attendance?secret=...
+                  </div>
+                  <span className="text-slate-400 block mb-1">15-Min Pre-Punch Alert Webhook</span>
+                  <div className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl font-mono text-[11px] text-amber-400 break-all">
+                    GET /api/alert?secret=...
                   </div>
                 </div>
 
@@ -312,6 +316,7 @@ export default function Home() {
                   <span className="text-slate-400 block text-[11px]">Bot Commands & Buttons:</span>
                   <div className="bg-slate-950/60 p-2.5 rounded-xl font-mono text-[11px] text-slate-300 space-y-1">
                     <div className="text-emerald-400">/mark <span className="text-slate-400">- Punch attendance</span></div>
+                    <div className="text-purple-400">/history <span className="text-slate-400">- View attendance logs</span></div>
                     <div className="text-sky-400">/status <span className="text-slate-400">- System & shift status</span></div>
                     <div className="text-blue-400">/help <span className="text-slate-400">- Display menu</span></div>
                   </div>

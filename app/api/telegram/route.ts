@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { markAttendance } from '@/lib/markAttendance';
+import { markAttendance, getAttendanceHistory } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery } from '@/lib/telegram';
 
 export async function POST(request: Request) {
@@ -18,6 +18,10 @@ export async function POST(request: Request) {
                 await handleMarkAttendance(chatId);
             } else if (data === 'action_status') {
                 await handleStatusRequest(chatId);
+            } else if (data === 'action_history') {
+                await handleHistoryRequest(chatId);
+            } else if (data === 'action_skip') {
+                await handleSkipRequest(chatId);
             }
 
             return NextResponse.json({ ok: true });
@@ -36,13 +40,15 @@ export async function POST(request: Request) {
             await handleMarkAttendance(chatId);
         } else if (text.startsWith('/status')) {
             await handleStatusRequest(chatId);
+        } else if (text.startsWith('/history')) {
+            await handleHistoryRequest(chatId);
         } else if (text.startsWith('/start') || text.startsWith('/help')) {
             await handleHelpRequest(chatId);
         } else {
             // Unrecognized text command, reply with help options
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance immediately, or /status to check shift info.`,
+                `Send /mark to punch attendance, /history to view logs, or /status for system state.`,
                 chatId,
                 getInteractiveKeyboard()
             );
@@ -56,7 +62,6 @@ export async function POST(request: Request) {
 }
 
 async function handleMarkAttendance(chatId: string | number) {
-    // Send "Processing..." notification
     await sendTelegramMessage('⏳ <b>Processing attendance punch...</b>', chatId);
 
     try {
@@ -91,6 +96,39 @@ async function handleMarkAttendance(chatId: string | number) {
     }
 }
 
+async function handleHistoryRequest(chatId: string | number) {
+    await sendTelegramMessage('⏳ <b>Fetching attendance history from HRone...</b>', chatId);
+
+    try {
+        const history = await getAttendanceHistory();
+        const historyJson = JSON.stringify(history.data, null, 2);
+        const truncatedHistory = historyJson.length > 2500 ? historyJson.substring(0, 2500) + '\n... (truncated)' : historyJson;
+
+        const historyText =
+            `📊 <b>HRone Attendance History (${history.month}/${history.year})</b>\n\n` +
+            `<b>Domain:</b> uharvest\n` +
+            `<b>Employee ID:</b> 4050\n\n` +
+            `<b>History Data Payload:</b>\n` +
+            `<pre><code class="language-json">${truncatedHistory}</code></pre>`;
+
+        await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard());
+    } catch (error: any) {
+        await sendTelegramMessage(
+            `❌ <b>Failed to fetch attendance history</b>\n\n<b>Error:</b> ${error.message}`,
+            chatId,
+            getInteractiveKeyboard()
+        );
+    }
+}
+
+async function handleSkipRequest(chatId: string | number) {
+    const skipText =
+        `⏸️ <b>Auto-Punch Skipped</b>\n\n` +
+        `Pre-punch alert acknowledged. Auto-punch action for today's shift has been skipped.`;
+
+    await sendTelegramMessage(skipText, chatId, getInteractiveKeyboard());
+}
+
 async function handleStatusRequest(chatId: string | number) {
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -112,8 +150,9 @@ async function handleStatusRequest(chatId: string | number) {
 async function handleHelpRequest(chatId: string | number) {
     const helpText =
         `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
-        `You can control your HRone attendance punches directly from Telegram:\n\n` +
+        `Available Telegram Controls:\n\n` +
         `• /mark - Punch attendance now\n` +
+        `• /history - View monthly attendance logs\n` +
         `• /status - View current IST time & shift mode\n` +
         `• /help - Display this menu`;
 
@@ -125,6 +164,7 @@ function getInteractiveKeyboard() {
         inline_keyboard: [
             [
                 { text: '📍 Punch Attendance Now', callback_data: 'action_mark' },
+                { text: '📊 Attendance History', callback_data: 'action_history' }
             ],
             [
                 { text: 'ℹ️ Check System Status', callback_data: 'action_status' }
@@ -138,6 +178,7 @@ function getFailureKeyboard() {
         inline_keyboard: [
             [
                 { text: '🔄 Retry Punch Now', callback_data: 'action_mark' },
+                { text: '📊 Attendance History', callback_data: 'action_history' }
             ],
             [
                 { text: 'ℹ️ Check System Status', callback_data: 'action_status' }

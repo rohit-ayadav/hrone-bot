@@ -104,3 +104,85 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
         response: attendanceData,
     };
 }
+
+export async function getAttendanceHistory(): Promise<any> {
+    const username = process.env.HR_USERNAME;
+    const password = process.env.HR_PASSWORD;
+    const domain = 'uharvest';
+
+    if (!username || !password) {
+        throw new Error('Missing HR_USERNAME or HR_PASSWORD environment variables');
+    }
+
+    // 1. Fetch OAuth token
+    const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
+        method: 'POST',
+        headers: {
+            'accept': 'application/json, text/plain, */*',
+            'content-type': 'application/x-www-form-urlencoded',
+            'domaincode': domain,
+            'accessmode': 'W',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+            'origin': 'https://app.hrone.cloud',
+            'referer': 'https://app.hrone.cloud/',
+        },
+        body: new URLSearchParams({
+            username: username,
+            password: password,
+            grant_type: 'password',
+            loginType: '1',
+            companyDomainCode: domain,
+            isUpdated: '0',
+            validSource: 'Y',
+            deviceName: 'Chrome-windows-10',
+        }),
+    });
+
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+        throw new Error(tokenData.error_description || 'Failed to authenticate with HRone Gateway');
+    }
+
+    const jwtToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token || '';
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    // 2. Query History API
+    try {
+        const historyRes = await fetch('https://app.hrone.cloud/api/timeoffice/mobile/checkin/Attendance/History', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json, text/plain, */*',
+                'content-type': 'application/json',
+                'domaincode': domain,
+                'accessmode': 'W',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+                'origin': 'https://app.hrone.cloud',
+                'referer': 'https://app.hrone.cloud/app',
+                'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
+            },
+            body: JSON.stringify({
+                employeeId: 4050,
+                month: month,
+                year: year,
+            }),
+        });
+
+        const historyData = await historyRes.json();
+        return {
+            month,
+            year,
+            data: historyData,
+        };
+    } catch (err: any) {
+        return {
+            month,
+            year,
+            data: null,
+            error: err.message
+        };
+    }
+}
