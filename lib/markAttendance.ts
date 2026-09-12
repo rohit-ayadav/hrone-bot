@@ -86,6 +86,42 @@ export async function verifyHROneCredentials(
     }
 }
 
+function parseTimeStringToDate(todayStr: string, timeStr: string): Date | null {
+    if (!timeStr || timeStr === 'Not Punched' || timeStr === '00:00') return null;
+
+    if (timeStr.includes('T')) {
+        const d = new Date(timeStr);
+        if (!isNaN(d.getTime())) return d;
+    }
+
+    const match = timeStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
+    if (match) {
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const ampm = match[3];
+
+        if (ampm) {
+            if (ampm.toUpperCase() === 'PM' && h < 12) h += 12;
+            if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
+        }
+
+        const [year, month, day] = todayStr.split('-').map(Number);
+        return new Date(Date.UTC(year, month - 1, day, h, m) - (5.5 * 60 * 60 * 1000));
+    }
+
+    return null;
+}
+
+function formatTimeString(date: Date): string {
+    const istDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    let hours = istDate.getHours();
+    const minutes = istDate.getMinutes().toString().padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+}
+
 export async function markAttendance(
     overrideAction?: 'In' | 'Out',
     profile?: UserProfile
@@ -137,14 +173,84 @@ export async function markAttendance(
     const jwtToken = tokenData.access_token;
     const refreshToken = tokenData.refresh_token || '';
 
-    // 2. Determine exact current IST Punch Time & Action
+    // 2. Determine exact current IST Punch Time
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const hour = istDate.getHours();
-    const action = overrideAction || (hour < 14 ? 'In' : 'Out');
-
     const pad = (n: number) => n.toString().padStart(2, '0');
-    const punchTime = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
+    const todayStr = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}`;
+    const punchTime = `${todayStr}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
+
+    // 3. Query today's HRone attendance status to check 9-hour shift rule
+    let firstPunchDate: Date | null = null;
+    let hasPunchedToday = false;
+
+    const queryHeaders = {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+        'domaincode': domain,
+        'accessmode': 'W',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        'origin': 'https://app.hrone.cloud',
+        'referer': 'https://app.hrone.cloud/app',
+        'x-requested-with': 'https://app.hrone.cloud',
+        'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
+    };
+
+    try {
+        const [daywiseRes, rawPunchRes] = await Promise.all([
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/${empId}/${todayStr}`, { method: 'GET', headers: queryHeaders }),
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/${empId}/${todayStr}/true`, { method: 'GET', headers: queryHeaders })
+        ]);
+
+        const daywiseData = daywiseRes.ok ? await daywiseRes.json() : null;
+        const rawPunchData = (rawPunchRes.ok && rawPunchRes.status === 200) ? await rawPunchRes.json() : [];
+        const daySummary = Array.isArray(daywiseData) && daywiseData.length > 0 ? daywiseData[0] : null;
+
+        if (Array.isArray(rawPunchData) && rawPunchData.length > 0) {
+            hasPunchedToday = true;
+            const first = rawPunchData[0];
+            if (first && first.punchDateTime) {
+                firstPunchDate = parseTimeStringToDate(todayStr, first.punchDateTime);
+            }
+        }
+
+        if (!firstPunchDate && daySummary && daySummary.timeIn && daySummary.timeIn !== 'Not Punched' && daySummary.timeIn !== '00:00') {
+            hasPunchedToday = true;
+            firstPunchDate = parseTimeStringToDate(todayStr, daySummary.timeIn);
+        }
+    } catch (e) {
+        console.error('Warning: Failed to fetch today attendance state before punching:', e);
+    }
+
+    // Determine Punch Action based on today's state & 9-hour rule
+    let action: 'In' | 'Out';
+
+    if (overrideAction) {
+        action = overrideAction;
+    } else if (!hasPunchedToday || !firstPunchDate) {
+        action = 'In';
+    } else {
+        // User has already checked in today! Check if 9 hours have elapsed.
+        const elapsedMs = istDate.getTime() - firstPunchDate.getTime();
+        const elapsedHours = elapsedMs / (1000 * 60 * 60);
+
+        if (elapsedHours < 9) {
+            const targetOutDate = new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
+            const remainingMs = targetOutDate.getTime() - istDate.getTime();
+            const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
+            const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+            const inTimeFormatted = formatTimeString(firstPunchDate);
+            const outTimeFormatted = formatTimeString(targetOutDate);
+
+            throw new Error(
+                `Check-In recorded today at ${inTimeFormatted} IST. Minimum 9 working hours required before Punch Out.\n` +
+                `Time Elapsed: ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m.\n` +
+                `Eligible for Punch Out after ${outTimeFormatted} IST (${remHours}h ${remMins}m remaining).`
+            );
+        }
+
+        action = 'Out';
+    }
 
     const requestPayload = {
         requestType: 'A',
