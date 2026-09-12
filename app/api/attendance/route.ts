@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/db';
 import User from '@/models/User';
+import AttendanceLog from '@/models/AttendanceLog';
 import { markAttendance } from '@/lib/markAttendance';
 import { sendTelegramMessage } from '@/lib/telegram';
 
@@ -70,6 +71,17 @@ export async function GET(request: Request) {
                     `<pre><code class="language-json">${truncatedRes}</code></pre>`;
 
                 if (user.chatId) {
+                    await AttendanceLog.create({
+                        chatId: user.chatId,
+                        hrUsername: user.hrUsername,
+                        action: result.action,
+                        punchTime: result.punchTime,
+                        status: 'SUCCESS',
+                        source: 'AUTOMATED_CRON',
+                        requestPayload: result.requestPayload,
+                        responsePayload: result.response,
+                    });
+
                     await sendTelegramMessage(
                         successMessage,
                         user.chatId,
@@ -103,6 +115,16 @@ export async function GET(request: Request) {
                     (userErr.stack ? `<b>Stack Trace:</b>\n<pre><code>${userErr.stack.substring(0, 800)}</code></pre>` : '');
 
                 if (user.chatId) {
+                    await AttendanceLog.create({
+                        chatId: user.chatId,
+                        hrUsername: user.hrUsername,
+                        action: (new Date().getHours() < 14 ? 'In' : 'Out'),
+                        punchTime: new Date().toISOString(),
+                        status: 'FAILED',
+                        source: 'AUTOMATED_CRON',
+                        errorMessage: userErr.message || 'Unknown error',
+                    });
+
                     await sendTelegramMessage(
                         failureMessage,
                         user.chatId,

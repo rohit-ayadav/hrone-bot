@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/db';
 import User, { IUser } from '@/models/User';
+import AttendanceLog from '@/models/AttendanceLog';
 import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
@@ -40,6 +41,8 @@ export async function POST(request: Request) {
                 await handleToggleAuto(chatId, user);
             } else if (data === 'action_settings') {
                 await handleSettingsRequest(chatId, user);
+            } else if (data === 'action_myhistory') {
+                await handleMyHistory(chatId, user);
             }
 
             return NextResponse.json({ ok: true });
@@ -147,6 +150,8 @@ export async function POST(request: Request) {
             } else {
                 await handleHistoryRequest(chatId, dateParam, user);
             }
+        } else if (text.startsWith('/myhistory') || text.startsWith('/dblogs')) {
+            await handleMyHistory(chatId, user);
         } else if (text.startsWith('/settings')) {
             await handleSettingsRequest(chatId, user);
         } else if (text.startsWith('/toggleauto')) {
@@ -266,6 +271,17 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
             geoAccuracy: user.geoAccuracy,
         });
 
+        await AttendanceLog.create({
+            chatId,
+            hrUsername: user.hrUsername,
+            action: result.action,
+            punchTime: result.punchTime,
+            status: 'SUCCESS',
+            source: 'MANUAL',
+            requestPayload: result.requestPayload,
+            responsePayload: result.response,
+        });
+
         const reqJson = JSON.stringify(result.requestPayload, null, 2);
         const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
 
@@ -285,6 +301,16 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
 
         await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
     } catch (error: any) {
+        await AttendanceLog.create({
+            chatId,
+            hrUsername: user.hrUsername,
+            action: (new Date().getHours() < 14 ? 'In' : 'Out'),
+            punchTime: new Date().toISOString(),
+            status: 'FAILED',
+            source: 'MANUAL',
+            errorMessage: error.message || 'Unknown error',
+        });
+
         const now = new Date();
         const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toLocaleString('en-IN');
 
@@ -330,6 +356,28 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
             employeeId: user.employeeId,
         });
 
+        let dbLogsText = '';
+        try {
+            const datePrefix = history.date;
+            const dbLogs = await AttendanceLog.find({
+                chatId,
+                punchTime: { $regex: datePrefix }
+            }).sort({ createdAt: -1 });
+
+            if (dbLogs && dbLogs.length > 0) {
+                dbLogsText = dbLogs.map((log: any) => {
+                    const time = log.punchTime ? (log.punchTime.includes('T') ? log.punchTime.split('T')[1] : log.punchTime) : 'N/A';
+                    const icon = log.status === 'SUCCESS' ? '✅' : '❌';
+                    const sourceLabel = log.source === 'AUTOMATED_CRON' ? 'Cron' : 'Manual';
+                    return `• <b>${time}</b> (${log.action}) ${icon} [${sourceLabel}]`;
+                }).join('\n');
+            } else {
+                dbLogsText = '<i>No database punch logs recorded for this date.</i>';
+            }
+        } catch (e) {
+            dbLogsText = '<i>Database logs unavailable.</i>';
+        }
+
         let punchListText = '';
         if (Array.isArray(history.rawPunches) && history.rawPunches.length > 0) {
             punchListText = history.rawPunches.map((p: any) => {
@@ -350,7 +398,9 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
             `<b>Check Out:</b> ${summary?.timeOut || 'Not Punched'}\n` +
             `<b>Total Hours:</b> ${summary?.workingHours || '00:00'}\n` +
             `<b>Shift:</b> ${summary?.shift || 'General'}\n\n` +
-            `<b>Raw Punch Logs (${history.rawPunches?.length || 0}):</b>\n` +
+            `💾 <b>Saved Bot DB Logs:</b>\n` +
+            `${dbLogsText}\n\n` +
+            `🌐 <b>HRone Raw Punch Logs (${history.rawPunches?.length || 0}):</b>\n` +
             punchListText;
 
         await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard(user));
@@ -360,6 +410,37 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
             chatId,
             getInteractiveKeyboard(user)
         );
+    }
+}
+
+async function handleMyHistory(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your account.', chatId);
+        return;
+    }
+
+    try {
+        const logs = await AttendanceLog.find({ chatId }).sort({ createdAt: -1 }).limit(15);
+        if (!logs || logs.length === 0) {
+            await sendTelegramMessage('💾 <b>Database Audit History</b>\n\n<i>No attendance punch records found in DB yet.</i>', chatId, getInteractiveKeyboard(user));
+            return;
+        }
+
+        const logLines = logs.map((log: any) => {
+            const dt = log.punchTime || log.createdAt.toISOString();
+            const icon = log.status === 'SUCCESS' ? '✅' : '❌';
+            const src = log.source === 'AUTOMATED_CRON' ? 'Cron' : 'Manual';
+            return `• <b>${dt}</b> (${log.action}) ${icon} [${src}]`;
+        }).join('\n');
+
+        const text =
+            `💾 <b>Saved DB Attendance History (Last ${logs.length}):</b>\n` +
+            `<b>Account:</b> ${user.hrUsername}\n\n` +
+            logLines;
+
+        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+    } catch (err: any) {
+        await sendTelegramMessage(`❌ Error fetching DB logs: ${err.message}`, chatId, getInteractiveKeyboard(user));
     }
 }
 
@@ -489,9 +570,10 @@ function getInteractiveKeyboard(user?: IUser | null) {
             ],
             [
                 { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
-                { text: '⚙️ Settings', callback_data: 'action_settings' }
+                { text: '💾 DB Punch Logs', callback_data: 'action_myhistory' }
             ],
             [
+                { text: '⚙️ Settings', callback_data: 'action_settings' },
                 { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' }
             ]
         ]
