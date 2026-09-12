@@ -185,18 +185,9 @@ export async function POST(request: Request) {
         try {
             const chatId = body?.message?.chat?.id || body?.callback_query?.message?.chat?.id || body?.callback_query?.from?.id;
             if (chatId) {
-                let userFriendlyError = error.message || 'An unexpected system error occurred. Please try again.';
-
-                if (error.code === 11000 || (error.message && error.message.includes('E11000'))) {
-                    userFriendlyError = 'A database index conflict occurred. The system has automatically cleared the stale index—please try your request again!';
-                } else if (error.name === 'ValidationError') {
-                    userFriendlyError = `Validation error: ${error.message}`;
-                }
-
                 await sendTelegramMessage(
-                    `⚠️ <b>System Error Encountered</b>\n\n` +
-                    `<b>Details:</b> ${userFriendlyError}\n\n` +
-                    `<i>Please try sending your command again, or type /cancel to reset setup.</i>`,
+                    `⚠️ <b>Something went wrong</b>\n\n` +
+                    `An unexpected error occurred while processing your request. Please try again, or type /cancel to restart setup.`,
                     String(chatId)
                 );
             }
