@@ -4,10 +4,14 @@ export interface MarkAttendanceResult {
     success: boolean;
     action: 'In' | 'Out';
     punchTime: string;
+    randomOffsetMinutes: number;
     response: any;
 }
 
-export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<MarkAttendanceResult> {
+export async function markAttendance(
+    overrideAction?: 'In' | 'Out',
+    randomizeMinutes: boolean = true
+): Promise<MarkAttendanceResult> {
     const username = process.env.HR_USERNAME;
     const password = process.env.HR_PASSWORD;
     const domain = 'uharvest';
@@ -49,11 +53,18 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
     const jwtToken = tokenData.access_token;
     const refreshToken = tokenData.refresh_token || '';
 
-    // 2. Determine IST Punch Time & Action
+    // 2. Determine IST Punch Time & Action with ±15 minute randomization
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const hour = istDate.getHours();
     const action = overrideAction || (hour < 14 ? 'In' : 'Out');
+
+    let randomOffsetMinutes = 0;
+    if (randomizeMinutes) {
+        // Generate random offset between -15 and +15 minutes
+        randomOffsetMinutes = Math.floor(Math.random() * 31) - 15;
+        istDate.setMinutes(istDate.getMinutes() + randomOffsetMinutes);
+    }
 
     const pad = (n: number) => n.toString().padStart(2, '0');
     const punchTime = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
@@ -101,6 +112,7 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
         success: true,
         action,
         punchTime,
+        randomOffsetMinutes,
         response: attendanceData,
     };
 }
