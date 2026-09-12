@@ -41,7 +41,9 @@ export async function POST(request: Request) {
         } else if (text.startsWith('/status')) {
             await handleStatusRequest(chatId);
         } else if (text.startsWith('/history')) {
-            await handleHistoryRequest(chatId);
+            const parts = text.split(' ');
+            const dateParam = parts.slice(1).join(' ').trim();
+            await handleHistoryRequest(chatId, dateParam);
         } else if (text.startsWith('/start') || text.startsWith('/help')) {
             await handleHelpRequest(chatId);
         } else {
@@ -59,6 +61,33 @@ export async function POST(request: Request) {
         console.error('Error handling Telegram webhook:', error);
         return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+}
+
+function normalizeDateInput(input?: string): string | undefined {
+    if (!input) return undefined;
+    const trimmed = input.trim();
+
+    // Match YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        return trimmed;
+    }
+
+    // Match DD-MM-YYYY
+    if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
+        const [d, m, y] = trimmed.split('-');
+        return `${y}-${m}-${d}`;
+    }
+
+    // Match DD (e.g. 11 for 11th of current month)
+    if (/^\d{1,2}$/.test(trimmed)) {
+        const now = new Date();
+        const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const day = pad(parseInt(trimmed, 10));
+        return `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${day}`;
+    }
+
+    return undefined;
 }
 
 async function handleMarkAttendance(chatId: string | number) {
@@ -100,11 +129,13 @@ async function handleMarkAttendance(chatId: string | number) {
     }
 }
 
-async function handleHistoryRequest(chatId: string | number) {
-    await sendTelegramMessage('⏳ <b>Fetching attendance logs from HRone...</b>', chatId);
+async function handleHistoryRequest(chatId: string | number, dateInput?: string) {
+    const targetDate = normalizeDateInput(dateInput);
+    const dateLabel = targetDate || 'today';
+    await sendTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel} from HRone...</b>`, chatId);
 
     try {
-        const history = await getAttendanceHistory();
+        const history = await getAttendanceHistory(targetDate);
 
         let punchListText = '';
         if (Array.isArray(history.rawPunches) && history.rawPunches.length > 0) {
@@ -171,6 +202,8 @@ async function handleHelpRequest(chatId: string | number) {
         `Available Telegram Controls:\n\n` +
         `• /mark - Punch attendance (with ±15 min random jitter)\n` +
         `• /history - View today's attendance & raw punch logs\n` +
+        `• /history 2026-09-11 - View logs for specific date\n` +
+        `• /history 11 - View logs for 11th of current month\n` +
         `• /status - View current IST time & shift mode\n` +
         `• /help - Display this menu`;
 
