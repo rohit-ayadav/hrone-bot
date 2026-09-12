@@ -119,9 +119,9 @@ export default function Home() {
               className="bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all shadow-sm"
             >
               <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-                <path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.28c-.15.65-.54.81-1.08.5l-3.01-2.22-1.45 1.4c-.16.16-.3.3-.61.3l.22-3.05 5.56-5.02c.24-.22-.05-.34-.37-.13l-6.87 4.33-2.96-.92c-.64-.2-.65-.64.13-.95l11.57-4.46c.53-.2.99.12.84.94z"/>
+                <path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.28c-.15.65-.54.81-1.08.5l-3.01-2.22-1.45 1.4c-.16.16-.3.3-.61.3l.22-3.05 5.56-5.02c.24-.22-.05-.34-.37-.13l-6.87 4.33-2.96-.92c-.64-.2-.65-.64.13-.95l11.57-4.46c.53-.2.99.12.84.94z" />
               </svg>
-              <span>Launch @rohit_hrone_bot</span>
+              <span>Start at Telegram</span>
             </a>
 
             <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-xl px-4 py-2 flex flex-col items-start sm:items-end shadow-sm">
@@ -223,9 +223,8 @@ export default function Home() {
                         <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-2.5 font-mono text-slate-200">{log.username}</td>
                           <td className="py-2.5">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              log.action === 'In' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                            }`}>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.action === 'In' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                              }`}>
                               {log.action}
                             </span>
                           </td>
@@ -236,9 +235,8 @@ export default function Home() {
                             </span>
                           </td>
                           <td className="py-2.5">
-                            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${
-                              log.status === 'SUCCESS' ? 'text-emerald-400' : 'text-red-400'
-                            }`}>
+                            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${log.status === 'SUCCESS' ? 'text-emerald-400' : 'text-red-400'
+                              }`}>
                               {log.status === 'SUCCESS' ? '✅ Success' : '❌ Failed'}
                             </span>
                           </td>
@@ -259,11 +257,10 @@ export default function Home() {
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">Execute automated cron check-in or check-out trigger on demand</p>
                 </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${
-                  shiftMode === 'In'
-                    ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                }`}>
+                <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${shiftMode === 'In'
+                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  }`}>
                   Current Shift: <strong className="font-bold">{shiftMode}</strong>
                 </span>
               </div>
@@ -364,7 +361,7 @@ export default function Home() {
 
                 <div className="p-2.5 bg-slate-950/60 rounded-xl border border-slate-800/60">
                   <span className="font-semibold text-white block mb-0.5">⏱️ 9-Hour Shift Rule</span>
-                  <p className="text-[11px] text-slate-400">Checks MongoDB `AttendanceLog` exclusively. Punch Out is only allowed after 9 hours have elapsed since Check-In.</p>
+                  <p className="text-[11px] text-slate-400">Checks Database exclusively. Punch Out is only allowed after 9 hours have elapsed since Check-In.</p>
                 </div>
               </div>
             </div>
