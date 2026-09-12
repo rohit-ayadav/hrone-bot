@@ -105,7 +105,7 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
     };
 }
 
-export async function getAttendanceHistory(): Promise<any> {
+export async function getAttendanceHistory(targetDate?: string): Promise<any> {
     const username = process.env.HR_USERNAME;
     const password = process.env.HR_PASSWORD;
     const domain = 'uharvest';
@@ -146,42 +146,56 @@ export async function getAttendanceHistory(): Promise<any> {
     const jwtToken = tokenData.access_token;
     const refreshToken = tokenData.refresh_token || '';
 
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
+    // Calculate target date string (YYYY-MM-DD in IST)
+    let dateStr = targetDate;
+    if (!dateStr) {
+        const now = new Date();
+        const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        dateStr = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}`;
+    }
 
-    // 2. Query History API
+    const headers = {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+        'domaincode': domain,
+        'accessmode': 'W',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        'origin': 'https://app.hrone.cloud',
+        'referer': 'https://app.hrone.cloud/app/myprofile/calendar',
+        'x-requested-with': 'https://app.hrone.cloud',
+        'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
+    };
+
+    // 2. Query Daywise & RawPunch API
     try {
-        const historyRes = await fetch('https://app.hrone.cloud/api/timeoffice/mobile/checkin/Attendance/History', {
-            method: 'POST',
-            headers: {
-                'accept': 'application/json, text/plain, */*',
-                'content-type': 'application/json',
-                'domaincode': domain,
-                'accessmode': 'W',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-                'origin': 'https://app.hrone.cloud',
-                'referer': 'https://app.hrone.cloud/app',
-                'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
-            },
-            body: JSON.stringify({
-                employeeId: 4050,
-                month: month,
-                year: year,
-            }),
-        });
+        const [daywiseRes, rawPunchRes] = await Promise.all([
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/4050/${dateStr}`, { method: 'GET', headers }),
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/4050/${dateStr}/true`, { method: 'GET', headers })
+        ]);
 
-        const historyData = await historyRes.json();
+        const daywiseData = daywiseRes.ok ? await daywiseRes.json() : null;
+        const rawPunchData = (rawPunchRes.ok && rawPunchRes.status === 200) ? await rawPunchRes.json() : [];
+
+        const daySummary = Array.isArray(daywiseData) && daywiseData.length > 0 ? daywiseData[0] : null;
+
         return {
-            month,
-            year,
-            data: historyData,
+            success: true,
+            date: dateStr,
+            summary: daySummary ? {
+                timeIn: daySummary.timeIn || 'Not Punched',
+                timeOut: daySummary.timeout || 'Not Punched',
+                workingHours: daySummary.workingHours || '00:00',
+                status: `${daySummary.firstHalfDisplayName || ''} / ${daySummary.secondHalfDisplayName || ''}`,
+                shift: daySummary.shiftCode || 'General',
+            } : null,
+            rawPunches: rawPunchData,
+            fullDaywise: daySummary,
         };
     } catch (err: any) {
         return {
-            month,
-            year,
-            data: null,
+            success: false,
+            date: dateStr,
             error: err.message
         };
     }

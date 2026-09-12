@@ -97,19 +97,32 @@ async function handleMarkAttendance(chatId: string | number) {
 }
 
 async function handleHistoryRequest(chatId: string | number) {
-    await sendTelegramMessage('⏳ <b>Fetching attendance history from HRone...</b>', chatId);
+    await sendTelegramMessage('⏳ <b>Fetching attendance logs from HRone...</b>', chatId);
 
     try {
         const history = await getAttendanceHistory();
-        const historyJson = JSON.stringify(history.data, null, 2);
-        const truncatedHistory = historyJson.length > 2500 ? historyJson.substring(0, 2500) + '\n... (truncated)' : historyJson;
 
+        let punchListText = '';
+        if (Array.isArray(history.rawPunches) && history.rawPunches.length > 0) {
+            punchListText = history.rawPunches.map((p: any) => {
+                const time = p.punchDateTime ? p.punchDateTime.substring(11, 16) : 'N/A';
+                const loc = p.punchLocation ? (p.punchLocation.length > 40 ? p.punchLocation.substring(0, 40) + '...' : p.punchLocation) : 'Online Check-in';
+                return `• <b>${time}</b> (${p.punchSource || 'Check-in'} - <i>${loc}</i>)`;
+            }).join('\n');
+        } else {
+            punchListText = '<i>No raw punch entries recorded for this date.</i>';
+        }
+
+        const summary = history.summary;
         const historyText =
-            `📊 <b>HRone Attendance History (${history.month}/${history.year})</b>\n\n` +
-            `<b>Domain:</b> uharvest\n` +
-            `<b>Employee ID:</b> 4050\n\n` +
-            `<b>History Data Payload:</b>\n` +
-            `<pre><code class="language-json">${truncatedHistory}</code></pre>`;
+            `📊 <b>HRone Attendance Logs (${history.date})</b>\n\n` +
+            `<b>Status:</b> ${summary?.status || 'N/A'}\n` +
+            `<b>Check In:</b> ${summary?.timeIn || 'Not Punched'}\n` +
+            `<b>Check Out:</b> ${summary?.timeOut || 'Not Punched'}\n` +
+            `<b>Total Hours:</b> ${summary?.workingHours || '00:00'}\n` +
+            `<b>Shift:</b> ${summary?.shift || 'General'}\n\n` +
+            `<b>Raw Punch Logs (${history.rawPunches?.length || 0}):</b>\n` +
+            punchListText;
 
         await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard());
     } catch (error: any) {
@@ -152,7 +165,7 @@ async function handleHelpRequest(chatId: string | number) {
         `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
         `Available Telegram Controls:\n\n` +
         `• /mark - Punch attendance now\n` +
-        `• /history - View monthly attendance logs\n` +
+        `• /history - View today's attendance & raw punch logs\n` +
         `• /status - View current IST time & shift mode\n` +
         `• /help - Display this menu`;
 
