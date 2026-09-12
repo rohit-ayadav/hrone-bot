@@ -3,6 +3,7 @@ import { connectToDatabase } from '@/lib/db';
 import User, { IUser } from '@/models/User';
 import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery } from '@/lib/telegram';
+import { encrypt } from '@/lib/crypto';
 
 export async function POST(request: Request) {
     try {
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
                     const verifyRes = await verifyHROneCredentials(user.hrUsername, text, user.domainCode);
 
                     if (verifyRes.valid) {
-                        user.hrPassword = text;
+                        user.hrPassword = encrypt(text);
                         if (verifyRes.employeeId) user.employeeId = verifyRes.employeeId;
                         user.registrationState = 'IDLE';
                         user.autoMarkEnabled = true;

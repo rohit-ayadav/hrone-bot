@@ -1,4 +1,5 @@
 import { sendTelegramMessage } from './telegram';
+import { decrypt } from './crypto';
 
 export interface UserProfile {
     hrUsername?: string;
@@ -21,9 +22,10 @@ export interface MarkAttendanceResult {
 
 export async function verifyHROneCredentials(
     username: string,
-    password: string,
+    passwordInput: string,
     domain: string = 'uharvest'
 ): Promise<{ valid: boolean; tokenData?: any; employeeId?: number; error?: string }> {
+    const password = decrypt(passwordInput);
     try {
         const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
             method: 'POST',
@@ -89,7 +91,8 @@ export async function markAttendance(
     profile?: UserProfile
 ): Promise<MarkAttendanceResult> {
     const username = profile?.hrUsername || process.env.HR_USERNAME;
-    const password = profile?.hrPassword || process.env.HR_PASSWORD;
+    const rawPassword = profile?.hrPassword || process.env.HR_PASSWORD;
+    const password = decrypt(rawPassword || '');
     const domain = profile?.domainCode || 'uharvest';
     const empId = profile?.employeeId || 4050;
     const lat = profile?.latitude || '28.500385614012345';
@@ -195,7 +198,8 @@ export async function markAttendance(
 
 export async function getAttendanceHistory(targetDate?: string, profile?: UserProfile): Promise<any> {
     const username = profile?.hrUsername || process.env.HR_USERNAME;
-    const password = profile?.hrPassword || process.env.HR_PASSWORD;
+    const rawPassword = profile?.hrPassword || process.env.HR_PASSWORD;
+    const password = decrypt(rawPassword || '');
     const domain = profile?.domainCode || 'uharvest';
     const empId = profile?.employeeId || 4050;
 
