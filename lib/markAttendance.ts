@@ -4,6 +4,7 @@ export interface MarkAttendanceResult {
     success: boolean;
     action: 'In' | 'Out';
     punchTime: string;
+    requestPayload: any;
     response: any;
 }
 
@@ -58,6 +59,24 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
     const pad = (n: number) => n.toString().padStart(2, '0');
     const punchTime = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
 
+    const requestPayload = {
+        requestType: 'A',
+        applyRequestSource: 10,
+        employeeId: 4050,
+        latitude: '28.500385614012345',
+        longitude: '77.41499672380527',
+        geoAccuracy: '10',
+        geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
+        punchTime: punchTime,
+        remarks: action,
+        uploadedPhotoOneName: '',
+        uploadedPhotoOnePath: '',
+        uploadedPhotoTwoName: '',
+        uploadedPhotoTwoPath: '',
+        attendanceSource: 'A',
+        attendanceType: 'Online',
+    };
+
     // 3. Mark Attendance
     const attendanceRes = await fetch('https://app.hrone.cloud/api/timeoffice/mobile/checkin/Attendance/Request', {
         method: 'POST',
@@ -72,23 +91,7 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
             'x-requested-with': 'https://app.hrone.cloud',
             'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
         },
-        body: JSON.stringify({
-            requestType: 'A',
-            applyRequestSource: 10,
-            employeeId: 4050,
-            latitude: '28.500385614012345',
-            longitude: '77.41499672380527',
-            geoAccuracy: '10',
-            geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
-            punchTime: punchTime,
-            remarks: action,
-            uploadedPhotoOneName: '',
-            uploadedPhotoOnePath: '',
-            uploadedPhotoTwoName: '',
-            uploadedPhotoTwoPath: '',
-            attendanceSource: 'A',
-            attendanceType: 'Online',
-        }),
+        body: JSON.stringify(requestPayload),
     });
 
     const attendanceData = await attendanceRes.json();
@@ -101,6 +104,7 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
         success: true,
         action,
         punchTime,
+        requestPayload,
         response: attendanceData,
     };
 }

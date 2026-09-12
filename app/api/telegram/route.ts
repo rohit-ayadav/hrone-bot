@@ -96,8 +96,11 @@ async function handleMarkAttendance(chatId: string | number) {
     try {
         const result = await markAttendance();
 
-        const payloadJson = JSON.stringify(result.response, null, 2);
-        const truncatedPayload = payloadJson.length > 2500 ? payloadJson.substring(0, 2500) + '\n... (truncated)' : payloadJson;
+        const reqJson = JSON.stringify(result.requestPayload, null, 2);
+        const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
+
+        const resJson = JSON.stringify(result.response, null, 2);
+        const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
 
         const successText =
             `✅ <b>Attendance Punched Successfully!</b>\n\n` +
@@ -105,8 +108,10 @@ async function handleMarkAttendance(chatId: string | number) {
             `<b>Time:</b> ${result.punchTime} (IST)\n` +
             `<b>Location:</b> altF Sector 142, Noida\n` +
             `<b>Source:</b> Online Web Check-in\n\n` +
-            `<b>Full API Response Payload:</b>\n` +
-            `<pre><code class="language-json">${truncatedPayload}</code></pre>`;
+            `<b>📤 Sent Request Payload:</b>\n` +
+            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
+            `<b>📥 Received API Response:</b>\n` +
+            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
 
         await sendTelegramMessage(successText, chatId, getInteractiveKeyboard());
     } catch (error: any) {

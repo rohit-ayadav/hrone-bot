@@ -13,9 +13,11 @@ export async function GET(request: Request) {
     try {
         const result = await markAttendance();
 
-        // Format full HRone API response payload for Telegram
-        const payloadJson = JSON.stringify(result.response, null, 2);
-        const truncatedPayload = payloadJson.length > 2500 ? payloadJson.substring(0, 2500) + '\n... (truncated)' : payloadJson;
+        const reqJson = JSON.stringify(result.requestPayload, null, 2);
+        const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
+
+        const resJson = JSON.stringify(result.response, null, 2);
+        const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
 
         const successMessage =
             `⏰ <b>Automated Attendance Triggered (Success)</b>\n\n` +
@@ -23,8 +25,10 @@ export async function GET(request: Request) {
             `<b>Punch Time:</b> ${result.punchTime} (IST)\n` +
             `<b>Location:</b> altF Sector 142, Noida\n` +
             `<b>Status:</b> Success ✅\n\n` +
-            `<b>Full API Response Payload:</b>\n` +
-            `<pre><code class="language-json">${truncatedPayload}</code></pre>`;
+            `<b>📤 Sent Request Payload:</b>\n` +
+            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
+            `<b>📥 Received API Response:</b>\n` +
+            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
 
         // Send notification to Telegram channel/user with action keyboard
         await sendTelegramMessage(
