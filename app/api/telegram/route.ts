@@ -99,14 +99,10 @@ async function handleMarkAttendance(chatId: string | number) {
         const payloadJson = JSON.stringify(result.response, null, 2);
         const truncatedPayload = payloadJson.length > 2500 ? payloadJson.substring(0, 2500) + '\n... (truncated)' : payloadJson;
 
-        const offsetText = result.randomOffsetMinutes !== 0
-            ? ` (${result.randomOffsetMinutes > 0 ? '+' : ''}${result.randomOffsetMinutes}m jitter)`
-            : '';
-
         const successText =
             `✅ <b>Attendance Punched Successfully!</b>\n\n` +
             `<b>Action:</b> Punch ${result.action}\n` +
-            `<b>Time:</b> ${result.punchTime}${offsetText} (IST)\n` +
+            `<b>Time:</b> ${result.punchTime} (IST)\n` +
             `<b>Location:</b> altF Sector 142, Noida\n` +
             `<b>Source:</b> Online Web Check-in\n\n` +
             `<b>Full API Response Payload:</b>\n` +
@@ -190,7 +186,6 @@ async function handleStatusRequest(chatId: string | number) {
         `ℹ️ <b>HROne Bot System Status</b>\n\n` +
         `<b>Current IST Time:</b> ${istString}\n` +
         `<b>Active Shift Mode:</b> Punch ${shiftMode} (${hour < 14 ? 'Before 2 PM' : 'After 2 PM'})\n` +
-        `<b>Random Jitter:</b> Enabled (±15 min window)\n` +
         `<b>Status:</b> Engine Operational 🟢`;
 
     await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard());
@@ -200,7 +195,7 @@ async function handleHelpRequest(chatId: string | number) {
     const helpText =
         `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
         `Available Telegram Controls:\n\n` +
-        `• /mark - Punch attendance (with ±15 min random jitter)\n` +
+        `• /mark - Punch attendance\n` +
         `• /history - View today's attendance & raw punch logs\n` +
         `• /history 2026-09-11 - View logs for specific date\n` +
         `• /history 11 - View logs for 11th of current month\n` +

@@ -17,14 +17,10 @@ export async function GET(request: Request) {
         const payloadJson = JSON.stringify(result.response, null, 2);
         const truncatedPayload = payloadJson.length > 2500 ? payloadJson.substring(0, 2500) + '\n... (truncated)' : payloadJson;
 
-        const offsetText = result.randomOffsetMinutes !== 0
-            ? ` (${result.randomOffsetMinutes > 0 ? '+' : ''}${result.randomOffsetMinutes}m jitter)`
-            : '';
-
         const successMessage =
             `⏰ <b>Automated Attendance Triggered (Success)</b>\n\n` +
             `<b>Action:</b> Punch ${result.action}\n` +
-            `<b>Punch Time:</b> ${result.punchTime}${offsetText} (IST)\n` +
+            `<b>Punch Time:</b> ${result.punchTime} (IST)\n` +
             `<b>Location:</b> altF Sector 142, Noida\n` +
             `<b>Status:</b> Success ✅\n\n` +
             `<b>Full API Response Payload:</b>\n` +
