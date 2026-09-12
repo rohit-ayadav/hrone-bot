@@ -1,7 +1,10 @@
 import { sendTelegramMessage } from './telegram';
 import { decrypt } from './crypto';
+import { connectToDatabase } from './db';
+import AttendanceLog from '@/models/AttendanceLog';
 
 export interface UserProfile {
+    chatId?: string;
     hrUsername?: string;
     hrPassword?: string;
     domainCode?: string;
@@ -180,62 +183,41 @@ export async function markAttendance(
     const todayStr = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}`;
     const punchTime = `${todayStr}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
 
-    // 3. Query today's HRone attendance status to check 9-hour shift rule
+    // 3. Check OUR MongoDB AttendanceLog collection EXCLUSIVELY for today's punch state
     let firstPunchDate: Date | null = null;
     let hasPunchedInToday = false;
     let hasPunchedOutToday = false;
     let timeOutStr: string | null = null;
 
-    const queryHeaders = {
-        'accept': 'application/json, text/plain, */*',
-        'content-type': 'application/json',
-        'domaincode': domain,
-        'accessmode': 'W',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-        'origin': 'https://app.hrone.cloud',
-        'referer': 'https://app.hrone.cloud/app',
-        'x-requested-with': 'https://app.hrone.cloud',
-        'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
-    };
-
     try {
-        const [daywiseRes, rawPunchRes] = await Promise.all([
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/${empId}/${todayStr}`, { method: 'GET', headers: queryHeaders }),
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/${empId}/${todayStr}/true`, { method: 'GET', headers: queryHeaders })
-        ]);
+        await connectToDatabase();
+        const queryFilter: any = {
+            status: 'SUCCESS',
+            punchTime: { $regex: todayStr }
+        };
+        if (profile?.chatId) {
+            queryFilter.chatId = profile.chatId;
+        } else if (username) {
+            queryFilter.hrUsername = username;
+        }
 
-        const daywiseData = daywiseRes.ok ? await daywiseRes.json() : null;
-        const rawPunchData = (rawPunchRes.ok && rawPunchRes.status === 200) ? await rawPunchRes.json() : [];
-        const daySummary = Array.isArray(daywiseData) && daywiseData.length > 0 ? daywiseData[0] : null;
+        const todayLogs = await AttendanceLog.find(queryFilter).sort({ createdAt: 1 });
 
-        if (Array.isArray(rawPunchData) && rawPunchData.length > 0) {
-            hasPunchedInToday = true;
-            const first = rawPunchData[0];
-            if (first && first.punchDateTime) {
-                firstPunchDate = parseTimeStringToDate(todayStr, first.punchDateTime);
+        if (todayLogs && todayLogs.length > 0) {
+            const inLog = todayLogs.find((l: any) => l.action === 'In');
+            if (inLog) {
+                hasPunchedInToday = true;
+                firstPunchDate = parseTimeStringToDate(todayStr, inLog.punchTime);
             }
-            if (rawPunchData.length >= 2) {
+
+            const outLog = todayLogs.find((l: any) => l.action === 'Out');
+            if (outLog) {
                 hasPunchedOutToday = true;
-                const last = rawPunchData[rawPunchData.length - 1];
-                if (last && last.punchDateTime) {
-                    timeOutStr = last.punchDateTime.substring(11, 16);
-                }
+                timeOutStr = outLog.punchTime.includes('T') ? outLog.punchTime.split('T')[1] : outLog.punchTime;
             }
-        }
-
-        const checkInVal = daySummary?.timeIn || daySummary?.timein;
-        if (!firstPunchDate && checkInVal && checkInVal !== 'Not Punched' && checkInVal !== '00:00') {
-            hasPunchedInToday = true;
-            firstPunchDate = parseTimeStringToDate(todayStr, checkInVal);
-        }
-
-        const checkOutVal = daySummary?.timeOut || daySummary?.timeout;
-        if (checkOutVal && checkOutVal !== 'Not Punched' && checkOutVal !== '00:00') {
-            hasPunchedOutToday = true;
-            if (!timeOutStr) timeOutStr = checkOutVal;
         }
     } catch (e) {
-        console.error('Warning: Failed to fetch today attendance state before punching:', e);
+        console.error('Warning: Error reading AttendanceLog from MongoDB:', e);
     }
 
     // Determine Punch Action based on today's state & 9-hour rule

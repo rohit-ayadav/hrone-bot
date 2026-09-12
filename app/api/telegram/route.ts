@@ -43,6 +43,8 @@ export async function POST(request: Request) {
                 await handleSettingsRequest(chatId, user);
             } else if (data === 'action_myhistory') {
                 await handleMyHistory(chatId, user);
+            } else if (data === 'action_help') {
+                await handleHelpRequest(chatId, user);
             }
 
             return NextResponse.json({ ok: true });
@@ -511,14 +513,21 @@ async function handleStatusRequest(chatId: string, user?: IUser | null) {
 
 async function handleHelpRequest(chatId: string, user?: IUser | null) {
     const helpText =
-        `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
-        `Available Telegram Controls:\n\n` +
-        `• /register - Link / update your HRone account\n` +
-        `• /mark - Punch attendance immediately\n` +
-        `• /history - View attendance logs (or pick day 1-31)\n` +
-        `• /settings - View account profile & auto-punch toggle\n` +
-        `• /status - View current IST time & shift mode\n` +
-        `• /help - Display this menu`;
+        `❓ <b>HROne Bot Help & User Guide</b>\n\n` +
+        `<b>Available Bot Commands:</b>\n` +
+        `• /mark - Punch attendance (Auto In/Out based on 9-hr rule)\n` +
+        `• /history - Open 1–31 day calendar date picker\n` +
+        `• /myhistory - View your MongoDB audit punch logs\n` +
+        `• /status - Check engine status & current IST time\n` +
+        `• /settings - Account profile & auto-punch toggle\n` +
+        `• /updatelocation - Change custom GPS work location\n` +
+        `• /updatecreds - Update HRone username & password\n` +
+        `• /unregister - Delete profile from bot\n\n` +
+        `⏰ <b>9-Hour Working Shift Rule:</b>\n` +
+        `• First punch of the day is automatically recorded as <b>Check-In</b>.\n` +
+        `• <b>Punch Out</b> is only permitted after <b>9 working hours</b> have passed since Check-In.\n` +
+        `• If you have already Punched Out in DB today, automated cron punches skip gracefully.\n\n` +
+        `Tap any interactive button below to navigate:`;
 
     await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard(user));
 }
@@ -575,6 +584,9 @@ function getInteractiveKeyboard(user?: IUser | null) {
             [
                 { text: '⚙️ Settings', callback_data: 'action_settings' },
                 { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' }
+            ],
+            [
+                { text: '❓ Help & User Guide', callback_data: 'action_help' }
             ]
         ]
     };
