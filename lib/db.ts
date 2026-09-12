@@ -32,8 +32,18 @@ export async function connectToDatabase(): Promise<typeof mongoose | null> {
       bufferCommands: false,
     };
 
-    cached.promise = mongoose.connect(MONGODB_URI, opts).then((m) => {
+    cached.promise = mongoose.connect(MONGODB_URI, opts).then(async (m) => {
       console.log('Successfully connected to MongoDB');
+      try {
+        const usersCollection = m.connection.collection('users');
+        const indexes = await usersCollection.indexes();
+        if (indexes.some((idx) => idx.name === 'clerkId_1')) {
+          await usersCollection.dropIndex('clerkId_1');
+          console.log('Successfully dropped stale MongoDB index clerkId_1');
+        }
+      } catch (err) {
+        // Collection might not exist yet, ignore
+      }
       return m;
     });
   }
