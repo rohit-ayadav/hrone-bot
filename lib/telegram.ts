@@ -51,3 +51,22 @@ export async function answerCallbackQuery(callbackQueryId: string, text?: string
         console.error('Failed to answer Telegram callback query:', error);
     }
 }
+
+export async function reverseGeocode(lat: number, lng: number): Promise<string> {
+    try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
+            headers: {
+                'User-Agent': 'HROne-Bot/1.0 (contact@devblogger.in)'
+            }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (data && data.display_name) {
+                return data.display_name;
+            }
+        }
+    } catch (e) {
+        console.error('Reverse geocode failed:', e);
+    }
+    return `Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`;
+}

@@ -3,7 +3,7 @@ import { connectToDatabase } from '@/lib/db';
 import User, { IUser } from '@/models/User';
 import AttendanceLog from '@/models/AttendanceLog';
 import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
-import { sendTelegramMessage, answerCallbackQuery } from '@/lib/telegram';
+import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
 
 export async function POST(request: Request) {
@@ -52,17 +52,46 @@ export async function POST(request: Request) {
             return NextResponse.json({ ok: true });
         }
 
-        // 2. Handle Text Commands & Wizard Inputs
+        // 2. Handle Text Messages & Location Sharing
         const message = body.message;
-        if (!message || !message.text) {
+        if (!message) {
             return NextResponse.json({ ok: true });
         }
 
         const chatId = String(message.chat.id);
-        const text = message.text.trim();
         const telegramUsername = message.from?.username || '';
-
         let user = await User.findOne({ chatId });
+
+        // Handle Live GPS Location sharing from Telegram
+        if (message.location) {
+            const { latitude, longitude } = message.location;
+            if (user) {
+                const geoAddr = await reverseGeocode(latitude, longitude);
+                user.latitude = String(latitude);
+                user.longitude = String(longitude);
+                user.geoLocation = geoAddr;
+                user.registrationState = 'IDLE';
+                await user.save();
+
+                const successText =
+                    `📍 <b>Live GPS Location Updated Successfully!</b>\n\n` +
+                    `<b>Latitude:</b> <code>${latitude}</code>\n` +
+                    `<b>Longitude:</b> <code>${longitude}</code>\n` +
+                    `<b>Geo Address:</b> ${geoAddr}`;
+
+                await sendTelegramMessage(successText, chatId, {
+                    ...getInteractiveKeyboard(user),
+                    remove_keyboard: true
+                });
+                return NextResponse.json({ ok: true });
+            }
+        }
+
+        if (!message.text) {
+            return NextResponse.json({ ok: true });
+        }
+
+        const text = message.text.trim();
 
         // Handle Wizard Steps if User is registering
         if (user && user.registrationState !== 'IDLE') {
@@ -165,11 +194,7 @@ export async function POST(request: Request) {
         } else if (text.startsWith('/updatecreds')) {
             await startRegistrationWizard(chatId, telegramUsername);
         } else if (text.startsWith('/updatelocation')) {
-            if (user) {
-                user.registrationState = 'AWAITING_LOCATION';
-                await user.save();
-                await sendTelegramMessage('📍 Please send your new custom location address / text:', chatId);
-            }
+            await handleLocationUpdateRequest(chatId, user);
         } else if (text.startsWith('/unregister') || text.startsWith('/deleteaccount')) {
             if (user) {
                 await User.deleteOne({ chatId });
@@ -485,6 +510,37 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
         `• /unregister - Delete account profile from bot`;
 
     await sendTelegramMessage(settingsText, chatId, getInteractiveKeyboard(user));
+}
+
+function getLocationKeyboard() {
+    return {
+        keyboard: [
+            [
+                { text: '📍 Share My Live GPS Location', request_location: true }
+            ],
+            [
+                { text: '❌ Cancel' }
+            ]
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true
+    };
+}
+
+async function handleLocationUpdateRequest(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    user.registrationState = 'AWAITING_LOCATION';
+    await user.save();
+
+    const text =
+        `📍 <b>Update Work GPS Location</b>\n\n` +
+        `Tap <b>"📍 Share My Live GPS Location"</b> below to automatically update your GPS coordinates, or reply with a custom location text/address:`;
+
+    await sendTelegramMessage(text, chatId, getLocationKeyboard());
 }
 
 async function handleSkipRequest(chatId: string) {
