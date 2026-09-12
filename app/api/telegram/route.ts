@@ -45,6 +45,8 @@ export async function POST(request: Request) {
                 await handleMyHistory(chatId, user);
             } else if (data === 'action_help') {
                 await handleHelpRequest(chatId, user);
+            } else if (data === 'action_monthly_stats') {
+                await handleStatsRequest(chatId, user);
             }
 
             return NextResponse.json({ ok: true });
@@ -154,6 +156,8 @@ export async function POST(request: Request) {
             }
         } else if (text.startsWith('/myhistory') || text.startsWith('/dblogs')) {
             await handleMyHistory(chatId, user);
+        } else if (text.startsWith('/stats') || text.startsWith('/analytics')) {
+            await handleStatsRequest(chatId, user);
         } else if (text.startsWith('/settings')) {
             await handleSettingsRequest(chatId, user);
         } else if (text.startsWith('/toggleauto')) {
@@ -511,6 +515,86 @@ async function handleStatusRequest(chatId: string, user?: IUser | null) {
     await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user));
 }
 
+async function handleStatsRequest(chatId: string, user?: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    try {
+        const now = new Date();
+        const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const monthPrefix = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}`;
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const monthLabel = `${monthNames[istDate.getMonth()]} ${istDate.getFullYear()}`;
+
+        const monthLogs = await AttendanceLog.find({
+            chatId,
+            status: 'SUCCESS',
+            punchTime: { $regex: monthPrefix }
+        }).sort({ createdAt: 1 });
+
+        const daysSet = new Set<string>();
+        let cronPunches = 0;
+        let manualPunches = 0;
+
+        monthLogs.forEach((log) => {
+            if (log.punchTime) {
+                daysSet.add(log.punchTime.split('T')[0]);
+            }
+            if (log.source === 'AUTOMATED_CRON') cronPunches++;
+            else manualPunches++;
+        });
+
+        let totalWorkedMinutes = 0;
+        const dayLogsMap: { [date: string]: { in?: Date; out?: Date } } = {};
+
+        monthLogs.forEach((log) => {
+            const datePart = log.punchTime?.split('T')[0];
+            if (!datePart) return;
+            if (!dayLogsMap[datePart]) dayLogsMap[datePart] = {};
+
+            const logTime = new Date(log.punchTime);
+            if (log.action === 'In' && !dayLogsMap[datePart].in) {
+                dayLogsMap[datePart].in = logTime;
+            } else if (log.action === 'Out') {
+                dayLogsMap[datePart].out = logTime;
+            }
+        });
+
+        Object.values(dayLogsMap).forEach((day) => {
+            if (day.in && day.out) {
+                const diffMs = day.out.getTime() - day.in.getTime();
+                if (diffMs > 0) {
+                    totalWorkedMinutes += Math.floor(diffMs / (1000 * 60));
+                }
+            }
+        });
+
+        const totalHours = Math.floor(totalWorkedMinutes / 60);
+        const remMins = totalWorkedMinutes % 60;
+        const daysWorkedCount = daysSet.size;
+        const avgMinsPerDay = daysWorkedCount > 0 ? Math.floor(totalWorkedMinutes / daysWorkedCount) : 0;
+        const avgHours = Math.floor(avgMinsPerDay / 60);
+        const avgMins = avgMinsPerDay % 60;
+
+        const statsText =
+            `📈 <b>Monthly Attendance Analytics (${monthLabel})</b>\n` +
+            `<b>Account:</b> ${user.hrUsername}\n\n` +
+            `📅 <b>Total Days Worked:</b> ${daysWorkedCount} Days\n` +
+            `⏱️ <b>Total Work Duration:</b> ${totalHours}h ${remMins}m\n` +
+            `⚡ <b>Average Work / Day:</b> ${avgHours}h ${avgMins}m\n` +
+            `🟢 <b>Cron Punches:</b> ${cronPunches} | 👤 <b>Manual:</b> ${manualPunches}\n` +
+            `📊 <b>Total Punches Logged:</b> ${monthLogs.length}\n\n` +
+            `<i>Keep up the great work! Powered by HROne Bot.</i>`;
+
+        await sendTelegramMessage(statsText, chatId, getInteractiveKeyboard(user));
+    } catch (err: any) {
+        await sendTelegramMessage(`❌ Error generating stats: ${err.message}`, chatId, getInteractiveKeyboard(user));
+    }
+}
+
 async function handleHelpRequest(chatId: string, user?: IUser | null) {
     const helpText =
         `❓ <b>HROne Bot Help & User Guide</b>\n\n` +
@@ -518,6 +602,7 @@ async function handleHelpRequest(chatId: string, user?: IUser | null) {
         `• /mark - Punch attendance (Auto In/Out based on 9-hr rule)\n` +
         `• /history - Open 1–31 day calendar date picker\n` +
         `• /myhistory - View your MongoDB audit punch logs\n` +
+        `• /stats - View monthly attendance analytics & hours\n` +
         `• /status - Check engine status & current IST time\n` +
         `• /settings - Account profile & auto-punch toggle\n` +
         `• /updatelocation - Change custom GPS work location\n` +
@@ -582,11 +667,12 @@ function getInteractiveKeyboard(user?: IUser | null) {
                 { text: '💾 DB Punch Logs', callback_data: 'action_myhistory' }
             ],
             [
-                { text: '⚙️ Settings', callback_data: 'action_settings' },
-                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' }
+                { text: '📈 Monthly Stats', callback_data: 'action_monthly_stats' },
+                { text: '⚙️ Settings', callback_data: 'action_settings' }
             ],
             [
-                { text: '❓ Help & User Guide', callback_data: 'action_help' }
+                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' },
+                { text: '❓ Help & Guide', callback_data: 'action_help' }
             ]
         ]
     };
