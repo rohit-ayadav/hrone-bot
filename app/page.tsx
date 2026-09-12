@@ -313,12 +313,13 @@ export default function Home() {
                 </div>
 
                 <div className="pt-2 border-t border-slate-800 space-y-1.5">
-                  <span className="text-slate-400 block text-[11px]">Bot Commands & Buttons:</span>
+                  <span className="text-slate-400 block text-[11px]">Self-Service Bot Commands:</span>
                   <div className="bg-slate-950/60 p-2.5 rounded-xl font-mono text-[11px] text-slate-300 space-y-1">
-                    <div className="text-emerald-400">/mark <span className="text-slate-400">- Punch attendance</span></div>
-                    <div className="text-purple-400">/history <span className="text-slate-400">- View attendance logs</span></div>
+                    <div className="text-emerald-400">/register <span className="text-slate-400">- Onboard HRone account</span></div>
+                    <div className="text-teal-400">/mark <span className="text-slate-400">- Punch attendance now</span></div>
+                    <div className="text-purple-400">/history <span className="text-slate-400">- View day 1-31 logs</span></div>
+                    <div className="text-amber-400">/settings <span className="text-slate-400">- View profile & toggle auto</span></div>
                     <div className="text-sky-400">/status <span className="text-slate-400">- System & shift status</span></div>
-                    <div className="text-blue-400">/help <span className="text-slate-400">- Display menu</span></div>
                   </div>
                 </div>
               </div>

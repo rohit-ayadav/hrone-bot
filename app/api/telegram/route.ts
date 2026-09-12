@@ -1,68 +1,177 @@
 import { NextResponse } from 'next/server';
-import { markAttendance, getAttendanceHistory } from '@/lib/markAttendance';
+import { connectToDatabase } from '@/lib/db';
+import User, { IUser } from '@/models/User';
+import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery } from '@/lib/telegram';
 
 export async function POST(request: Request) {
     try {
+        await connectToDatabase();
         const body = await request.json();
 
         // 1. Handle Inline Button Click (Callback Queries)
         if (body.callback_query) {
             const callbackQuery = body.callback_query;
-            const chatId = callbackQuery.message.chat.id;
+            const chatId = String(callbackQuery.message.chat.id);
             const data = callbackQuery.data;
 
             await answerCallbackQuery(callbackQuery.id, 'Processing request...');
 
-            if (data === 'action_mark') {
-                await handleMarkAttendance(chatId);
+            let user = await User.findOne({ chatId });
+
+            if (data === 'action_register') {
+                await startRegistrationWizard(chatId, callbackQuery.from?.username);
+            } else if (data === 'action_mark') {
+                await handleMarkAttendance(chatId, user);
             } else if (data === 'action_status') {
-                await handleStatusRequest(chatId);
+                await handleStatusRequest(chatId, user);
             } else if (data === 'action_history') {
-                await handleHistoryRequest(chatId);
+                await handleHistoryRequest(chatId, undefined, user);
             } else if (data === 'action_pick_date') {
                 await handleDatePickerRequest(chatId);
             } else if (data.startsWith('action_hist_day_')) {
                 const dayNum = data.replace('action_hist_day_', '');
-                await handleHistoryRequest(chatId, dayNum);
+                await handleHistoryRequest(chatId, dayNum, user);
             } else if (data === 'action_skip') {
                 await handleSkipRequest(chatId);
+            } else if (data === 'action_toggle_auto') {
+                await handleToggleAuto(chatId, user);
+            } else if (data === 'action_settings') {
+                await handleSettingsRequest(chatId, user);
             }
 
             return NextResponse.json({ ok: true });
         }
 
-        // 2. Handle Text Commands
+        // 2. Handle Text Commands & Wizard Inputs
         const message = body.message;
         if (!message || !message.text) {
             return NextResponse.json({ ok: true });
         }
 
-        const chatId = message.chat.id;
+        const chatId = String(message.chat.id);
         const text = message.text.trim();
+        const telegramUsername = message.from?.username || '';
 
-        if (text.startsWith('/mark')) {
-            await handleMarkAttendance(chatId);
+        let user = await User.findOne({ chatId });
+
+        // Handle Wizard Steps if User is registering
+        if (user && user.registrationState !== 'IDLE') {
+            const isCommand = text.startsWith('/');
+            if (!isCommand) {
+                if (user.registrationState === 'AWAITING_HR_USERNAME') {
+                    user.hrUsername = text;
+                    user.registrationState = 'AWAITING_HR_PASSWORD';
+                    await user.save();
+
+                    await sendTelegramMessage(
+                        `🔑 <b>Username Saved:</b> <code>${text}</code>\n\n` +
+                        `Now please send your <b>HRone Password</b>:`,
+                        chatId
+                    );
+                    return NextResponse.json({ ok: true });
+                }
+
+                if (user.registrationState === 'AWAITING_HR_PASSWORD') {
+                    await sendTelegramMessage('⏳ <b>Verifying your HRone credentials...</b>', chatId);
+
+                    const verifyRes = await verifyHROneCredentials(user.hrUsername, text, user.domainCode);
+
+                    if (verifyRes.valid) {
+                        user.hrPassword = text;
+                        if (verifyRes.employeeId) user.employeeId = verifyRes.employeeId;
+                        user.registrationState = 'IDLE';
+                        user.autoMarkEnabled = true;
+                        if (telegramUsername) user.telegramUsername = telegramUsername;
+                        await user.save();
+
+                        const successMsg =
+                            `🎉 <b>Account Registered & Verified Successfully!</b>\n\n` +
+                            `<b>Username:</b> <code>${user.hrUsername}</code>\n` +
+                            `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
+                            `<b>Auto-Punch:</b> Enabled 🟢\n\n` +
+                            `You can now punch attendance, view logs, or manage settings anytime!`;
+
+                        await sendTelegramMessage(successMsg, chatId, getInteractiveKeyboard(user));
+                    } else {
+                        await sendTelegramMessage(
+                            `❌ <b>Authentication Failed</b>\n\n` +
+                            `<b>Reason:</b> ${verifyRes.error || 'Invalid credentials'}\n\n` +
+                            `Please send your correct <b>HRone Password</b> to try again:`,
+                            chatId
+                        );
+                    }
+                    return NextResponse.json({ ok: true });
+                }
+
+                if (user.registrationState === 'AWAITING_LOCATION') {
+                    user.geoLocation = text;
+                    user.registrationState = 'IDLE';
+                    await user.save();
+
+                    await sendTelegramMessage(
+                        `📍 <b>Location Updated Successfully!</b>\n\n` +
+                        `<b>New Address:</b> ${user.geoLocation}`,
+                        chatId,
+                        getInteractiveKeyboard(user)
+                    );
+                    return NextResponse.json({ ok: true });
+                }
+            }
+        }
+
+        // Standard Text Commands
+        if (text.startsWith('/start') || text.startsWith('/register')) {
+            if (!user || user.registrationState !== 'IDLE') {
+                await startRegistrationWizard(chatId, telegramUsername);
+            } else {
+                await sendTelegramMessage(
+                    `👋 <b>Welcome back to HROne Bot!</b>\n\n` +
+                    `<b>Registered User:</b> <code>${user.hrUsername}</code>\n` +
+                    `<b>Auto-Punch:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}`,
+                    chatId,
+                    getInteractiveKeyboard(user)
+                );
+            }
+        } else if (text.startsWith('/mark')) {
+            await handleMarkAttendance(chatId, user);
         } else if (text.startsWith('/status')) {
-            await handleStatusRequest(chatId);
+            await handleStatusRequest(chatId, user);
         } else if (text.startsWith('/history')) {
             const parts = text.split(' ');
             const dateParam = parts.slice(1).join(' ').trim();
             if (!dateParam) {
-                // If user just typed /history without date, show the day picker buttons!
                 await handleDatePickerRequest(chatId);
             } else {
-                await handleHistoryRequest(chatId, dateParam);
+                await handleHistoryRequest(chatId, dateParam, user);
             }
-        } else if (text.startsWith('/start') || text.startsWith('/help')) {
-            await handleHelpRequest(chatId);
+        } else if (text.startsWith('/settings')) {
+            await handleSettingsRequest(chatId, user);
+        } else if (text.startsWith('/toggleauto')) {
+            await handleToggleAuto(chatId, user);
+        } else if (text.startsWith('/updatecreds')) {
+            await startRegistrationWizard(chatId, telegramUsername);
+        } else if (text.startsWith('/updatelocation')) {
+            if (user) {
+                user.registrationState = 'AWAITING_LOCATION';
+                await user.save();
+                await sendTelegramMessage('📍 Please send your new custom location address / text:', chatId);
+            }
+        } else if (text.startsWith('/unregister') || text.startsWith('/deleteaccount')) {
+            if (user) {
+                await User.deleteOne({ chatId });
+                await sendTelegramMessage('🗑️ <b>Account Unregistered</b>\n\nYour profile has been deleted and automated punches have stopped.', chatId);
+            } else {
+                await sendTelegramMessage('You are not currently registered.', chatId);
+            }
+        } else if (text.startsWith('/help')) {
+            await handleHelpRequest(chatId, user);
         } else {
-            // Unrecognized text command, reply with help options
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance, /history to pick date history, or /status for system state.`,
+                `Send /mark to punch attendance, /history to pick date history, or /settings for account info.`,
                 chatId,
-                getInteractiveKeyboard()
+                getInteractiveKeyboard(user)
             );
         }
 
@@ -73,22 +182,42 @@ export async function POST(request: Request) {
     }
 }
 
+async function startRegistrationWizard(chatId: string, telegramUsername?: string) {
+    let user = await User.findOne({ chatId });
+    if (!user) {
+        user = new User({
+            chatId,
+            telegramUsername,
+            hrUsername: 'pending',
+            hrPassword: 'pending',
+            registrationState: 'AWAITING_HR_USERNAME'
+        });
+    } else {
+        user.registrationState = 'AWAITING_HR_USERNAME';
+    }
+    await user.save();
+
+    const welcomeText =
+        `👋 <b>Welcome to HROne Self-Service Attendance Bot!</b>\n\n` +
+        `Let's get your account registered for automated check-in and check-out.\n\n` +
+        `<b>Step 1/2:</b> Please send your <b>HRone Username</b> (Mobile Number or Login ID):`;
+
+    await sendTelegramMessage(welcomeText, chatId);
+}
+
 function normalizeDateInput(input?: string): string | undefined {
     if (!input) return undefined;
     const trimmed = input.trim();
 
-    // Match YYYY-MM-DD
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
         return trimmed;
     }
 
-    // Match DD-MM-YYYY
     if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
         const [d, m, y] = trimmed.split('-');
         return `${y}-${m}-${d}`;
     }
 
-    // Match DD (e.g. 11 for 11th of current month)
     if (/^\d{1,2}$/.test(trimmed)) {
         const now = new Date();
         const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -100,11 +229,25 @@ function normalizeDateInput(input?: string): string | undefined {
     return undefined;
 }
 
-async function handleMarkAttendance(chatId: string | number) {
+async function handleMarkAttendance(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your HRone account.', chatId);
+        return;
+    }
+
     await sendTelegramMessage('⏳ <b>Processing attendance punch...</b>', chatId);
 
     try {
-        const result = await markAttendance();
+        const result = await markAttendance(undefined, {
+            hrUsername: user.hrUsername,
+            hrPassword: user.hrPassword,
+            domainCode: user.domainCode,
+            employeeId: user.employeeId,
+            latitude: user.latitude,
+            longitude: user.longitude,
+            geoLocation: user.geoLocation,
+            geoAccuracy: user.geoAccuracy,
+        });
 
         const reqJson = JSON.stringify(result.requestPayload, null, 2);
         const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
@@ -114,33 +257,32 @@ async function handleMarkAttendance(chatId: string | number) {
 
         const successText =
             `✅ <b>Attendance Punched Successfully!</b>\n\n` +
+            `<b>Account:</b> ${user.hrUsername}\n` +
             `<b>Action:</b> Punch ${result.action}\n` +
             `<b>Time:</b> ${result.punchTime} (IST)\n` +
-            `<b>Location:</b> altF Sector 142, Noida\n` +
-            `<b>Source:</b> Online Web Check-in\n\n` +
+            `<b>Location:</b> ${user.geoLocation}\n\n` +
             `<b>📤 Sent Request Payload:</b>\n` +
             `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
             `<b>📥 Received API Response:</b>\n` +
             `<pre><code class="language-json">${truncatedRes}</code></pre>`;
 
-        await sendTelegramMessage(successText, chatId, getInteractiveKeyboard());
+        await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
     } catch (error: any) {
         const now = new Date();
         const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toLocaleString('en-IN');
 
         const errorText =
             `❌ <b>Attendance Punch Failed!</b>\n\n` +
+            `<b>Account:</b> ${user.hrUsername}\n` +
             `<b>Error:</b> ${error.message || 'Unknown error'}\n` +
             `<b>Timestamp:</b> ${istTime} (IST)\n` +
-            `<b>Domain:</b> uharvest\n` +
-            `<b>Endpoint:</b> app.hrone.cloud\n\n` +
             (error.stack ? `<b>Stack Trace:</b>\n<pre><code>${error.stack.substring(0, 800)}</code></pre>` : '');
 
-        await sendTelegramMessage(errorText, chatId, getFailureKeyboard());
+        await sendTelegramMessage(errorText, chatId, getFailureKeyboard(user));
     }
 }
 
-async function handleDatePickerRequest(chatId: string | number) {
+async function handleDatePickerRequest(chatId: string) {
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -153,13 +295,23 @@ async function handleDatePickerRequest(chatId: string | number) {
     await sendTelegramMessage(pickerText, chatId, getDatePickerKeyboard());
 }
 
-async function handleHistoryRequest(chatId: string | number, dateInput?: string) {
+async function handleHistoryRequest(chatId: string, dateInput?: string, user?: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your HRone account.', chatId);
+        return;
+    }
+
     const targetDate = normalizeDateInput(dateInput);
     const dateLabel = targetDate || 'today';
-    await sendTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel} from HRone...</b>`, chatId);
+    await sendTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel}...</b>`, chatId);
 
     try {
-        const history = await getAttendanceHistory(targetDate);
+        const history = await getAttendanceHistory(targetDate, {
+            hrUsername: user.hrUsername,
+            hrPassword: user.hrPassword,
+            domainCode: user.domainCode,
+            employeeId: user.employeeId,
+        });
 
         let punchListText = '';
         if (Array.isArray(history.rawPunches) && history.rawPunches.length > 0) {
@@ -174,7 +326,8 @@ async function handleHistoryRequest(chatId: string | number, dateInput?: string)
 
         const summary = history.summary;
         const historyText =
-            `📊 <b>HRone Attendance Logs (${history.date})</b>\n\n` +
+            `📊 <b>HRone Attendance Logs (${history.date})</b>\n` +
+            `<b>Account:</b> ${user.hrUsername}\n\n` +
             `<b>Status:</b> ${summary?.status || 'N/A'}\n` +
             `<b>Check In:</b> ${summary?.timeIn || 'Not Punched'}\n` +
             `<b>Check Out:</b> ${summary?.timeOut || 'Not Punched'}\n` +
@@ -183,25 +336,62 @@ async function handleHistoryRequest(chatId: string | number, dateInput?: string)
             `<b>Raw Punch Logs (${history.rawPunches?.length || 0}):</b>\n` +
             punchListText;
 
-        await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard());
+        await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard(user));
     } catch (error: any) {
         await sendTelegramMessage(
             `❌ <b>Failed to fetch attendance history</b>\n\n<b>Error:</b> ${error.message}`,
             chatId,
-            getInteractiveKeyboard()
+            getInteractiveKeyboard(user)
         );
     }
 }
 
-async function handleSkipRequest(chatId: string | number) {
+async function handleToggleAuto(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    user.autoMarkEnabled = !user.autoMarkEnabled;
+    await user.save();
+
+    const statusText =
+        `⚙️ <b>Auto-Punch Status Updated</b>\n\n` +
+        `Automated Cron Punch is now <b>${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}</b> for user <code>${user.hrUsername}</code>.`;
+
+    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user));
+}
+
+async function handleSettingsRequest(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    const settingsText =
+        `⚙️ <b>Account Profile & Settings</b>\n\n` +
+        `<b>HRone Username:</b> <code>${user.hrUsername}</code>\n` +
+        `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
+        `<b>Auto-Punch Status:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
+        `<b>Geo Address:</b> ${user.geoLocation}\n\n` +
+        `<b>Available Management Commands:</b>\n` +
+        `• /toggleauto - Enable or disable automated cron punch\n` +
+        `• /updatelocation - Change custom location address\n` +
+        `• /updatecreds - Update HRone username/password\n` +
+        `• /unregister - Delete account profile from bot`;
+
+    await sendTelegramMessage(settingsText, chatId, getInteractiveKeyboard(user));
+}
+
+async function handleSkipRequest(chatId: string) {
     const skipText =
         `⏸️ <b>Auto-Punch Skipped</b>\n\n` +
         `Pre-punch alert acknowledged. Auto-punch action for today's shift has been skipped.`;
 
-    await sendTelegramMessage(skipText, chatId, getInteractiveKeyboard());
+    await sendTelegramMessage(skipText, chatId);
 }
 
-async function handleStatusRequest(chatId: string | number) {
+async function handleStatusRequest(chatId: string, user?: IUser | null) {
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const hour = istDate.getHours();
@@ -214,23 +404,25 @@ async function handleStatusRequest(chatId: string | number) {
         `ℹ️ <b>HROne Bot System Status</b>\n\n` +
         `<b>Current IST Time:</b> ${istString}\n` +
         `<b>Active Shift Mode:</b> Punch ${shiftMode} (${hour < 14 ? 'Before 2 PM' : 'After 2 PM'})\n` +
+        `<b>Registered User:</b> ${user?.hrUsername || 'Not Linked'}\n` +
+        `<b>Auto-Punch:</b> ${user?.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
         `<b>Status:</b> Engine Operational 🟢`;
 
-    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard());
+    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user));
 }
 
-async function handleHelpRequest(chatId: string | number) {
+async function handleHelpRequest(chatId: string, user?: IUser | null) {
     const helpText =
         `👋 <b>Welcome to HROne Attendance Bot!</b>\n\n` +
         `Available Telegram Controls:\n\n` +
-        `• /mark - Punch attendance\n` +
-        `• /history - Open day picker (1-31) or view today's logs\n` +
-        `• /history 11 - View logs for 11th of current month\n` +
-        `• /history 2026-09-11 - View logs for specific date\n` +
+        `• /register - Link / update your HRone account\n` +
+        `• /mark - Punch attendance immediately\n` +
+        `• /history - View attendance logs (or pick day 1-31)\n` +
+        `• /settings - View account profile & auto-punch toggle\n` +
         `• /status - View current IST time & shift mode\n` +
         `• /help - Display this menu`;
 
-    await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard());
+    await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard(user));
 }
 
 function getDatePickerKeyboard() {
@@ -263,7 +455,15 @@ function getDatePickerKeyboard() {
     return { inline_keyboard: rows };
 }
 
-function getInteractiveKeyboard() {
+function getInteractiveKeyboard(user?: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        return {
+            inline_keyboard: [
+                [{ text: '🚀 Register HRone Account', callback_data: 'action_register' }]
+            ]
+        };
+    }
+
     return {
         inline_keyboard: [
             [
@@ -272,18 +472,21 @@ function getInteractiveKeyboard() {
             ],
             [
                 { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
-                { text: 'ℹ️ System Status', callback_data: 'action_status' }
+                { text: '⚙️ Settings', callback_data: 'action_settings' }
+            ],
+            [
+                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' }
             ]
         ]
     };
 }
 
-function getFailureKeyboard() {
+function getFailureKeyboard(user?: IUser | null) {
     return {
         inline_keyboard: [
             [
                 { text: '🔄 Retry Punch Now', callback_data: 'action_mark' },
-                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' }
+                { text: '⚙️ Settings', callback_data: 'action_settings' }
             ],
             [
                 { text: 'ℹ️ Check System Status', callback_data: 'action_status' }

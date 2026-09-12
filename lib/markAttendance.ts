@@ -1,5 +1,16 @@
 import { sendTelegramMessage } from './telegram';
 
+export interface UserProfile {
+    hrUsername?: string;
+    hrPassword?: string;
+    domainCode?: string;
+    employeeId?: number;
+    latitude?: string;
+    longitude?: string;
+    geoLocation?: string;
+    geoAccuracy?: string;
+}
+
 export interface MarkAttendanceResult {
     success: boolean;
     action: 'In' | 'Out';
@@ -8,13 +19,86 @@ export interface MarkAttendanceResult {
     response: any;
 }
 
-export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<MarkAttendanceResult> {
-    const username = process.env.HR_USERNAME;
-    const password = process.env.HR_PASSWORD;
-    const domain = 'uharvest';
+export async function verifyHROneCredentials(
+    username: string,
+    password: string,
+    domain: string = 'uharvest'
+): Promise<{ valid: boolean; tokenData?: any; employeeId?: number; error?: string }> {
+    try {
+        const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json, text/plain, */*',
+                'content-type': 'application/x-www-form-urlencoded',
+                'domaincode': domain,
+                'accessmode': 'W',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+                'origin': 'https://app.hrone.cloud',
+                'referer': 'https://app.hrone.cloud/',
+            },
+            body: new URLSearchParams({
+                username: username,
+                password: password,
+                grant_type: 'password',
+                loginType: '1',
+                companyDomainCode: domain,
+                isUpdated: '0',
+                validSource: 'Y',
+                deviceName: 'Chrome-windows-10',
+            }),
+        });
+
+        const tokenData = await tokenRes.json();
+
+        if (!tokenRes.ok || !tokenData.access_token) {
+            return {
+                valid: false,
+                error: tokenData.error_description || tokenData.message || 'Invalid HRone credentials',
+            };
+        }
+
+        // Try parsing employeeId / LogOnId from token
+        let employeeId = 4050;
+        try {
+            const parts = tokenData.access_token.split('.');
+            if (parts.length === 3) {
+                const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+                if (payload.LogOnId) {
+                    employeeId = parseInt(payload.LogOnId, 10) || 4050;
+                }
+            }
+        } catch (e) {
+            // Fall back to 4050
+        }
+
+        return {
+            valid: true,
+            tokenData,
+            employeeId,
+        };
+    } catch (err: any) {
+        return {
+            valid: false,
+            error: err.message || 'Connection error while reaching HRone Gateway',
+        };
+    }
+}
+
+export async function markAttendance(
+    overrideAction?: 'In' | 'Out',
+    profile?: UserProfile
+): Promise<MarkAttendanceResult> {
+    const username = profile?.hrUsername || process.env.HR_USERNAME;
+    const password = profile?.hrPassword || process.env.HR_PASSWORD;
+    const domain = profile?.domainCode || 'uharvest';
+    const empId = profile?.employeeId || 4050;
+    const lat = profile?.latitude || '28.500385614012345';
+    const lng = profile?.longitude || '77.41499672380527';
+    const accuracy = profile?.geoAccuracy || '10';
+    const locAddress = profile?.geoLocation || '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India';
 
     if (!username || !password) {
-        throw new Error('Missing HR_USERNAME or HR_PASSWORD environment variables');
+        throw new Error('Missing HRone login credentials');
     }
 
     // 1. Fetch Fresh OAuth Token
@@ -62,11 +146,11 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
     const requestPayload = {
         requestType: 'A',
         applyRequestSource: 10,
-        employeeId: 4050,
-        latitude: '28.500385614012345',
-        longitude: '77.41499672380527',
-        geoAccuracy: '10',
-        geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
+        employeeId: empId,
+        latitude: lat,
+        longitude: lng,
+        geoAccuracy: accuracy,
+        geoLocation: locAddress,
         punchTime: punchTime,
         remarks: action,
         uploadedPhotoOneName: '',
@@ -109,13 +193,14 @@ export async function markAttendance(overrideAction?: 'In' | 'Out'): Promise<Mar
     };
 }
 
-export async function getAttendanceHistory(targetDate?: string): Promise<any> {
-    const username = process.env.HR_USERNAME;
-    const password = process.env.HR_PASSWORD;
-    const domain = 'uharvest';
+export async function getAttendanceHistory(targetDate?: string, profile?: UserProfile): Promise<any> {
+    const username = profile?.hrUsername || process.env.HR_USERNAME;
+    const password = profile?.hrPassword || process.env.HR_PASSWORD;
+    const domain = profile?.domainCode || 'uharvest';
+    const empId = profile?.employeeId || 4050;
 
     if (!username || !password) {
-        throw new Error('Missing HR_USERNAME or HR_PASSWORD environment variables');
+        throw new Error('Missing HRone credentials');
     }
 
     // 1. Fetch OAuth token
@@ -174,8 +259,8 @@ export async function getAttendanceHistory(targetDate?: string): Promise<any> {
     // 2. Query Daywise & RawPunch API
     try {
         const [daywiseRes, rawPunchRes] = await Promise.all([
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/4050/${dateStr}`, { method: 'GET', headers }),
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/4050/${dateStr}/true`, { method: 'GET', headers })
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/${empId}/${dateStr}`, { method: 'GET', headers }),
+            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/${empId}/${dateStr}/true`, { method: 'GET', headers })
         ]);
 
         const daywiseData = daywiseRes.ok ? await daywiseRes.json() : null;
