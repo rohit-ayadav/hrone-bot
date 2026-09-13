@@ -180,13 +180,93 @@ export async function GET(request: Request) {
             }
         }
 
+        // 4. Handle incomplete setup users & disabled auto-punch users to notify them of missed attendance
+        const incompleteOrDisabledUsers = await User.find({
+            $or: [
+                { registrationState: { $ne: 'IDLE' } },
+                { autoMarkEnabled: false, registrationState: 'IDLE' }
+            ]
+        });
+
+        const incompleteNotified: any[] = [];
+
+        for (const user of incompleteOrDisabledUsers) {
+            if (!user.chatId) continue;
+
+            if (user.registrationState !== 'IDLE') {
+                const incompleteMsg =
+                    `⚠️ <b>Automated Attendance Missed!</b>\n\n` +
+                    `<b>Account Status:</b> Registration Incomplete 🛠️\n` +
+                    `<b>Current Step:</b> ${getFriendlyStateName(user.registrationState)}\n\n` +
+                    `Automated check-in/check-out could not be marked for you because your HRone account setup is incomplete.\n\n` +
+                    `Tap below to complete your setup now so your attendance can be auto-punched:`;
+
+                await sendTelegramMessage(
+                    incompleteMsg,
+                    user.chatId,
+                    {
+                        inline_keyboard: [
+                            [{ text: '🚀 Complete Setup Now', callback_data: 'action_register' }]
+                        ]
+                    }
+                );
+
+                incompleteNotified.push({
+                    chatId: user.chatId,
+                    status: 'notified_incomplete',
+                    state: user.registrationState
+                });
+            } else if (!user.autoMarkEnabled) {
+                const disabledMsg =
+                    `⏸️ <b>Automated Attendance Skipped (Auto-Punch Off)</b>\n\n` +
+                    `<b>Account:</b> ${user.hrUsername}\n` +
+                    `<b>Status:</b> Auto-Punch is turned OFF 🔴\n\n` +
+                    `Automated attendance was skipped because auto-punch is currently disabled for your profile.\n\n` +
+                    `You can punch manually now or enable auto-punch anytime:`;
+
+                await sendTelegramMessage(
+                    disabledMsg,
+                    user.chatId,
+                    {
+                        inline_keyboard: [
+                            [{ text: '📍 Punch Attendance Now', callback_data: 'action_mark' }],
+                            [{ text: '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' }]
+                        ]
+                    }
+                );
+
+                incompleteNotified.push({
+                    chatId: user.chatId,
+                    username: user.hrUsername,
+                    status: 'notified_disabled'
+                });
+            }
+        }
+
         return NextResponse.json({
             success: true,
             totalProcessed: users.length,
             results,
+            incompleteOrDisabledNotified: incompleteNotified.length,
+            incompleteResults: incompleteNotified
         });
     } catch (error: any) {
         console.error('Failed execution in multi-user attendance cron:', error);
         return NextResponse.json({ error: 'Cron Failed', details: error.message }, { status: 500 });
+    }
+}
+
+function getFriendlyStateName(state: string): string {
+    switch (state) {
+        case 'AWAITING_HR_USERNAME':
+            return 'Awaiting HRone Username';
+        case 'AWAITING_HR_PASSWORD':
+            return 'Awaiting HRone Password';
+        case 'AWAITING_LOCATION':
+            return 'Awaiting GPS Location';
+        case 'AWAITING_TRANSFER_OTP':
+            return 'Awaiting Transfer OTP';
+        default:
+            return 'Incomplete Setup';
     }
 }
