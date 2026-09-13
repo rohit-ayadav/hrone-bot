@@ -107,6 +107,13 @@ export async function verifyAndExecuteTransfer(
         requestingUser.hrPassword = targetOldUser.hrPassword;
         requestingUser.domainCode = targetOldUser.domainCode;
         requestingUser.employeeId = targetOldUser.employeeId;
+        requestingUser.employeeCode = targetOldUser.employeeCode;
+        requestingUser.employeeName = targetOldUser.employeeName;
+        requestingUser.designation = targetOldUser.designation;
+        requestingUser.department = targetOldUser.department;
+        requestingUser.company = targetOldUser.company;
+        requestingUser.mobileNo = targetOldUser.mobileNo;
+        requestingUser.email = targetOldUser.email;
         requestingUser.latitude = targetOldUser.latitude;
         requestingUser.longitude = targetOldUser.longitude;
         requestingUser.geoLocation = targetOldUser.geoLocation;

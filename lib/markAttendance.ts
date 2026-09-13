@@ -23,11 +23,25 @@ export interface MarkAttendanceResult {
     response: any;
 }
 
+export interface VerifyHROneResult {
+    valid: boolean;
+    tokenData?: any;
+    employeeId?: number;
+    employeeCode?: string;
+    employeeName?: string;
+    designation?: string;
+    department?: string;
+    company?: string;
+    mobileNo?: string;
+    email?: string;
+    error?: string;
+}
+
 export async function verifyHROneCredentials(
     username: string,
     passwordInput: string,
     domain: string = 'uharvest'
-): Promise<{ valid: boolean; tokenData?: any; employeeId?: number; error?: string }> {
+): Promise<VerifyHROneResult> {
     const password = decrypt(passwordInput);
     try {
         const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
@@ -62,10 +76,13 @@ export async function verifyHROneCredentials(
             };
         }
 
+        const jwtToken = tokenData.access_token;
+        const refreshToken = tokenData.refresh_token || '';
+
         // Try parsing employeeId / LogOnId from token
         let employeeId = 4050;
         try {
-            const parts = tokenData.access_token.split('.');
+            const parts = jwtToken.split('.');
             if (parts.length === 3) {
                 const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
                 if (payload.LogOnId) {
@@ -76,10 +93,56 @@ export async function verifyHROneCredentials(
             // Fall back to 4050
         }
 
+        // Fetch rich user details from HRone LogOnUserDetail API
+        let employeeCode = '';
+        let employeeName = '';
+        let designation = '';
+        let department = '';
+        let company = '';
+        let mobileNo = '';
+        let email = '';
+
+        try {
+            const detailRes = await fetch('https://app.hrone.cloud/api/LogOnUser/LogOnUserDetail', {
+                method: 'GET',
+                headers: {
+                    'accept': 'application/json, text/plain, */*',
+                    'domaincode': domain,
+                    'accessmode': 'W',
+                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+                    'origin': 'https://app.hrone.cloud',
+                    'referer': 'https://app.hrone.cloud/hroneAuth',
+                    'x-requested-with': 'https://app.hrone.cloud',
+                    'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`
+                }
+            });
+
+            if (detailRes.ok) {
+                const details = await detailRes.json();
+                if (details.employeeId) employeeId = parseInt(details.employeeId, 10) || employeeId;
+                if (details.employeeCode) employeeCode = String(details.employeeCode);
+                if (details.employeeName) employeeName = String(details.employeeName);
+                if (details.designation) designation = String(details.designation);
+                if (details.department) department = String(details.department);
+                if (details.company || details.enterpriseName) company = String(details.company || details.enterpriseName);
+                if (details.mobileNo) mobileNo = String(details.mobileNo);
+                if (details.personalEmail || details.officialEmail) email = String(details.personalEmail || details.officialEmail);
+            }
+        } catch (detailErr) {
+            console.error('Warning: Error fetching LogOnUserDetail:', detailErr);
+        }
+
         return {
             valid: true,
             tokenData,
             employeeId,
+            employeeCode,
+            employeeName,
+            designation,
+            department,
+            company,
+            mobileNo,
+            email,
         };
     } catch (err: any) {
         return {

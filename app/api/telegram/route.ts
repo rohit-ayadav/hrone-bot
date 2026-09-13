@@ -189,15 +189,31 @@ export async function POST(request: Request) {
                     if (verifyRes.valid) {
                         user.hrPassword = encrypt(text);
                         if (verifyRes.employeeId) user.employeeId = verifyRes.employeeId;
+                        if (verifyRes.employeeCode) user.employeeCode = verifyRes.employeeCode;
+                        if (verifyRes.employeeName) user.employeeName = verifyRes.employeeName;
+                        if (verifyRes.designation) user.designation = verifyRes.designation;
+                        if (verifyRes.department) user.department = verifyRes.department;
+                        if (verifyRes.company) user.company = verifyRes.company;
+                        if (verifyRes.mobileNo) user.mobileNo = verifyRes.mobileNo;
+                        if (verifyRes.email) user.email = verifyRes.email;
+
                         user.registrationState = 'IDLE';
                         user.autoMarkEnabled = true;
                         if (telegramUsername) user.telegramUsername = telegramUsername;
                         await user.save();
 
+                        const empCodeDisplay = user.employeeCode ? `<code>${user.employeeCode}</code>` : `<code>${user.employeeId}</code>`;
+                        const nameDisplay = user.employeeName ? `\n<b>Name:</b> ${user.employeeName}` : '';
+                        const desigDisplay = user.designation ? `\n<b>Designation:</b> ${user.designation}` : '';
+                        const companyDisplay = user.company ? `\n<b>Company:</b> ${user.company}` : '';
+
                         const successMsg =
                             `🎉 <b>Account Registered & Verified Successfully!</b>\n\n` +
+                            `<b>Employee Code:</b> ${empCodeDisplay}` +
+                            `${nameDisplay}` +
+                            `${desigDisplay}` +
+                            `${companyDisplay}\n` +
                             `<b>Username:</b> <code>${user.hrUsername}</code>\n` +
-                            `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
                             `<b>Auto-Punch:</b> Enabled 🟢\n\n` +
                             `You can now punch attendance, view logs, or manage settings anytime!`;
 
@@ -225,10 +241,14 @@ export async function POST(request: Request) {
                     const transferRes = await verifyAndExecuteTransfer(user, text);
 
                     if (transferRes.success) {
+                        const empCodeDisplay = user.employeeCode ? `<code>${user.employeeCode}</code>` : `<code>${user.employeeId}</code>`;
+                        const nameDisplay = user.employeeName ? `\n<b>Name:</b> ${user.employeeName}` : '';
+
                         const successMsg =
                             `🎉 <b>Account Transferred & Verified Successfully!</b>\n\n` +
+                            `<b>Employee Code:</b> ${empCodeDisplay}` +
+                            `${nameDisplay}\n` +
                             `<b>Username:</b> <code>${user.hrUsername}</code>\n` +
-                            `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
                             `<b>Auto-Punch:</b> Enabled 🟢\n\n` +
                             `Your HRone account has been transferred to this Telegram profile. You can now punch attendance or manage settings!`;
 
@@ -625,10 +645,20 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
         return;
     }
 
+    const empCodeDisplay = user.employeeCode ? `<code>${user.employeeCode}</code>` : `<code>${user.employeeId}</code>`;
+    const nameDisplay = user.employeeName ? `\n<b>Name:</b> ${user.employeeName}` : '';
+    const desigDisplay = user.designation ? `\n<b>Designation:</b> ${user.designation}` : '';
+    const deptDisplay = user.department ? `\n<b>Department:</b> ${user.department}` : '';
+    const companyDisplay = user.company ? `\n<b>Company:</b> ${user.company}` : '';
+
     const settingsText =
         `⚙️ <b>Account Profile & Settings</b>\n\n` +
         `<b>HRone Username:</b> <code>${user.hrUsername}</code>\n` +
-        `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
+        `<b>Employee Code:</b> ${empCodeDisplay}` +
+        `${nameDisplay}` +
+        `${desigDisplay}` +
+        `${deptDisplay}` +
+        `${companyDisplay}\n` +
         `<b>Auto-Punch Status:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
         `<b>Geo Address:</b> ${user.geoLocation}\n\n` +
         `<b>Available Management Commands:</b>\n` +

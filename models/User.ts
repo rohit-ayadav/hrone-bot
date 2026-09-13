@@ -11,6 +11,13 @@ export interface IUser extends Document {
   longitude: string;
   geoLocation: string;
   geoAccuracy: string;
+  employeeCode?: string;
+  employeeName?: string;
+  designation?: string;
+  department?: string;
+  company?: string;
+  mobileNo?: string;
+  email?: string;
   autoMarkEnabled: boolean;
   registrationState: 'IDLE' | 'AWAITING_HR_USERNAME' | 'AWAITING_HR_PASSWORD' | 'AWAITING_LOCATION' | 'AWAITING_TRANSFER_OTP';
   transferOtp?: string;
@@ -28,6 +35,13 @@ const UserSchema: Schema<IUser> = new Schema<IUser>(
     hrPassword: { type: String, required: true },
     domainCode: { type: String, default: 'uharvest' },
     employeeId: { type: Number, default: 4050 },
+    employeeCode: { type: String, default: '' },
+    employeeName: { type: String, default: '' },
+    designation: { type: String, default: '' },
+    department: { type: String, default: '' },
+    company: { type: String, default: '' },
+    mobileNo: { type: String, default: '' },
+    email: { type: String, default: '' },
     latitude: { type: String, default: '28.500385614012345' },
     longitude: { type: String, default: '77.41499672380527' },
     geoLocation: { type: String, default: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India' },
