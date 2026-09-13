@@ -343,7 +343,7 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
         });
 
         const now = new Date();
-        const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toLocaleString('en-IN');
+        const istTime = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
         const errorText =
             `❌ <b>Attendance Punch Failed!</b>\n\n` +

@@ -89,15 +89,46 @@ export async function verifyHROneCredentials(
     }
 }
 
+export function getISTParts(date: Date = new Date()): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(date);
+    const map: Record<string, string> = {};
+    parts.forEach(p => { map[p.type] = p.value; });
+    return {
+        year: parseInt(map.year, 10),
+        month: parseInt(map.month, 10),
+        day: parseInt(map.day, 10),
+        hour: parseInt(map.hour, 10),
+        minute: parseInt(map.minute, 10),
+        second: parseInt(map.second, 10)
+    };
+}
+
+export function createDateFromIST(year: number, month: number, day: number, hour: number, minute: number, second = 0): Date {
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second) - (5.5 * 60 * 60 * 1000));
+}
+
 function parseTimeStringToDate(todayStr: string, timeStr: string): Date | null {
     if (!timeStr || timeStr === 'Not Punched' || timeStr === '00:00') return null;
 
+    let tStr = timeStr;
+    let dStr = todayStr;
     if (timeStr.includes('T')) {
-        const d = new Date(timeStr);
-        if (!isNaN(d.getTime())) return d;
+        const parts = timeStr.split('T');
+        dStr = parts[0];
+        tStr = parts[1];
     }
 
-    const match = timeStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
+    const match = tStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
     if (match) {
         let h = parseInt(match[1], 10);
         const m = parseInt(match[2], 10);
@@ -108,20 +139,19 @@ function parseTimeStringToDate(todayStr: string, timeStr: string): Date | null {
             if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
         }
 
-        const [year, month, day] = todayStr.split('-').map(Number);
-        return new Date(Date.UTC(year, month - 1, day, h, m) - (5.5 * 60 * 60 * 1000));
+        const [year, month, day] = dStr.split('-').map(Number);
+        return createDateFromIST(year, month, day, h, m);
     }
 
     return null;
 }
 
 function formatTimeString(date: Date): string {
-    const istDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    let hours = istDate.getHours();
-    const minutes = istDate.getMinutes().toString().padStart(2, '0');
+    const parts = getISTParts(date);
+    let hours = parts.hour;
+    const minutes = parts.minute.toString().padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
+    hours = hours % 12 || 12;
     return `${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
 }
 
@@ -178,10 +208,10 @@ export async function markAttendance(
 
     // 2. Determine exact current IST Punch Time
     const now = new Date();
-    const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istParts = getISTParts(now);
     const pad = (n: number) => n.toString().padStart(2, '0');
-    const todayStr = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}`;
-    const punchTime = `${todayStr}T${pad(istDate.getHours())}:${pad(istDate.getMinutes())}`;
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+    const punchTime = `${todayStr}T${pad(istParts.hour)}:${pad(istParts.minute)}`;
 
     // 3. Check OUR MongoDB AttendanceLog collection EXCLUSIVELY for today's punch state
     let firstPunchDate: Date | null = null;
@@ -213,7 +243,8 @@ export async function markAttendance(
             const outLog = todayLogs.find((l: any) => l.action === 'Out');
             if (outLog) {
                 hasPunchedOutToday = true;
-                timeOutStr = outLog.punchTime.includes('T') ? outLog.punchTime.split('T')[1] : outLog.punchTime;
+                const parsedOut = parseTimeStringToDate(todayStr, outLog.punchTime);
+                timeOutStr = parsedOut ? formatTimeString(parsedOut) : outLog.punchTime;
             }
         }
     } catch (e) {
@@ -233,12 +264,12 @@ export async function markAttendance(
         );
     } else {
         // User has checked in today, but not checked out! Check if 9 hours have elapsed.
-        const elapsedMs = istDate.getTime() - firstPunchDate.getTime();
+        const elapsedMs = now.getTime() - firstPunchDate.getTime();
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
 
         if (elapsedHours < 9) {
             const targetOutDate = new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
-            const remainingMs = targetOutDate.getTime() - istDate.getTime();
+            const remainingMs = targetOutDate.getTime() - now.getTime();
             const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
             const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
             const inTimeFormatted = formatTimeString(firstPunchDate);
@@ -350,10 +381,9 @@ export async function getAttendanceHistory(targetDate?: string, profile?: UserPr
     // Calculate target date string (YYYY-MM-DD in IST)
     let dateStr = targetDate;
     if (!dateStr) {
-        const now = new Date();
-        const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const istParts = getISTParts(new Date());
         const pad = (n: number) => n.toString().padStart(2, '0');
-        dateStr = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())}`;
+        dateStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
     }
 
     const headers = {

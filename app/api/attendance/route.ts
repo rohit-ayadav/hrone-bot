@@ -110,7 +110,7 @@ export async function GET(request: Request) {
                 );
 
                 const now = new Date();
-                const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toLocaleString('en-IN');
+                const istTime = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
                 if (isSkipReason) {
                     const skipMessage =
