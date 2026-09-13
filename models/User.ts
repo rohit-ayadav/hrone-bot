@@ -12,7 +12,10 @@ export interface IUser extends Document {
   geoLocation: string;
   geoAccuracy: string;
   autoMarkEnabled: boolean;
-  registrationState: 'IDLE' | 'AWAITING_HR_USERNAME' | 'AWAITING_HR_PASSWORD' | 'AWAITING_LOCATION';
+  registrationState: 'IDLE' | 'AWAITING_HR_USERNAME' | 'AWAITING_HR_PASSWORD' | 'AWAITING_LOCATION' | 'AWAITING_TRANSFER_OTP';
+  transferOtp?: string;
+  transferOtpExpiresAt?: Date;
+  pendingTransferTargetChatId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,9 +35,12 @@ const UserSchema: Schema<IUser> = new Schema<IUser>(
     autoMarkEnabled: { type: Boolean, default: true },
     registrationState: {
       type: String,
-      enum: ['IDLE', 'AWAITING_HR_USERNAME', 'AWAITING_HR_PASSWORD', 'AWAITING_LOCATION'],
+      enum: ['IDLE', 'AWAITING_HR_USERNAME', 'AWAITING_HR_PASSWORD', 'AWAITING_LOCATION', 'AWAITING_TRANSFER_OTP'],
       default: 'IDLE'
     },
+    transferOtp: { type: String, default: undefined },
+    transferOtpExpiresAt: { type: Date, default: undefined },
+    pendingTransferTargetChatId: { type: String, default: undefined },
   },
   { timestamps: true }
 );

@@ -5,6 +5,12 @@ import AttendanceLog from '@/models/AttendanceLog';
 import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
+import {
+    findExistingHROneUser,
+    initiateAccountTransfer,
+    verifyAndExecuteTransfer,
+    formatTelegramAccountIdentifier
+} from '@/lib/accountTransfer';
 
 export async function POST(request: Request) {
     let body: any = null;
@@ -47,6 +53,26 @@ export async function POST(request: Request) {
                 await handleHelpRequest(chatId, user);
             } else if (data === 'action_monthly_stats') {
                 await handleStatsRequest(chatId, user);
+            } else if (data === 'action_change_username') {
+                await handleChangeUsernameRequest(chatId, user);
+            } else if (data === 'action_cancel') {
+                if (user) {
+                    user.registrationState = 'IDLE';
+                    user.pendingTransferTargetChatId = undefined;
+                    user.transferOtp = undefined;
+                    user.transferOtpExpiresAt = undefined;
+                    await user.save();
+                }
+                await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
+            } else if (data === 'action_transfer_otp') {
+                if (user && user.pendingTransferTargetChatId) {
+                    const targetUser = await User.findOne({ chatId: user.pendingTransferTargetChatId });
+                    if (targetUser) {
+                        await initiateAccountTransfer(user, targetUser, callbackQuery.from?.username);
+                    } else {
+                        await sendTelegramMessage('⚠️ Target account no longer exists. Please restart registration.', chatId);
+                    }
+                }
             }
 
             return NextResponse.json({ ok: true });
@@ -95,9 +121,48 @@ export async function POST(request: Request) {
 
         // Handle Wizard Steps if User is registering
         if (user && user.registrationState !== 'IDLE') {
+            if (text === '/cancel') {
+                user.registrationState = 'IDLE';
+                user.pendingTransferTargetChatId = undefined;
+                user.transferOtp = undefined;
+                user.transferOtpExpiresAt = undefined;
+                await user.save();
+                await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
+                return NextResponse.json({ ok: true });
+            }
+
+            if (text === '/changeusername') {
+                await handleChangeUsernameRequest(chatId, user);
+                return NextResponse.json({ ok: true });
+            }
+
             const isCommand = text.startsWith('/');
             if (!isCommand) {
                 if (user.registrationState === 'AWAITING_HR_USERNAME') {
+                    const existingUser = await findExistingHROneUser(text, chatId);
+
+                    if (existingUser) {
+                        user.hrUsername = text;
+                        user.pendingTransferTargetChatId = existingUser.chatId;
+                        await user.save();
+
+                        const existingInfo = formatTelegramAccountIdentifier(existingUser);
+                        await sendTelegramMessage(
+                            `⚠️ <b>HRone Account Already Registered!</b>\n\n` +
+                            `The HRone account <code>${text}</code> is currently linked to <b>${existingInfo}</b>.\n\n` +
+                            `If this is your account and you wish to transfer it to this Telegram chat, tap <b>🔑 Transfer Account via OTP</b> below. An OTP will be sent to ${existingInfo}.`,
+                            chatId,
+                            {
+                                inline_keyboard: [
+                                    [{ text: '🔑 Send OTP to Transfer Account', callback_data: 'action_transfer_otp' }],
+                                    [{ text: '✏️ Change Username', callback_data: 'action_change_username' }],
+                                    [{ text: '❌ Cancel', callback_data: 'action_cancel' }]
+                                ]
+                            }
+                        );
+                        return NextResponse.json({ ok: true });
+                    }
+
                     user.hrUsername = text;
                     user.registrationState = 'AWAITING_HR_PASSWORD';
                     await user.save();
@@ -105,7 +170,13 @@ export async function POST(request: Request) {
                     await sendTelegramMessage(
                         `🔑 <b>Username Saved:</b> <code>${text}</code>\n\n` +
                         `Now please send your <b>HRone Password</b>:`,
-                        chatId
+                        chatId,
+                        {
+                            inline_keyboard: [
+                                [{ text: '✏️ Change Username', callback_data: 'action_change_username' }],
+                                [{ text: '❌ Cancel', callback_data: 'action_cancel' }]
+                            ]
+                        }
                     );
                     return NextResponse.json({ ok: true });
                 }
@@ -135,8 +206,45 @@ export async function POST(request: Request) {
                         await sendTelegramMessage(
                             `❌ <b>Authentication Failed</b>\n\n` +
                             `<b>Reason:</b> ${verifyRes.error || 'Invalid credentials'}\n\n` +
-                            `Please send your correct <b>HRone Password</b> to try again:`,
-                            chatId
+                            `Please send your correct <b>HRone Password</b> to try again, or tap below to edit your <b>Username</b> if it was entered incorrectly:`,
+                            chatId,
+                            {
+                                inline_keyboard: [
+                                    [{ text: '✏️ Change Username', callback_data: 'action_change_username' }],
+                                    [{ text: '❌ Cancel Setup', callback_data: 'action_cancel' }]
+                                ]
+                            }
+                        );
+                    }
+                    return NextResponse.json({ ok: true });
+                }
+
+                if (user.registrationState === 'AWAITING_TRANSFER_OTP') {
+                    await sendTelegramMessage('⏳ <b>Verifying OTP...</b>', chatId);
+
+                    const transferRes = await verifyAndExecuteTransfer(user, text);
+
+                    if (transferRes.success) {
+                        const successMsg =
+                            `🎉 <b>Account Transferred & Verified Successfully!</b>\n\n` +
+                            `<b>Username:</b> <code>${user.hrUsername}</code>\n` +
+                            `<b>Employee ID:</b> <code>${user.employeeId}</code>\n` +
+                            `<b>Auto-Punch:</b> Enabled 🟢\n\n` +
+                            `Your HRone account has been transferred to this Telegram profile. You can now punch attendance or manage settings!`;
+
+                        await sendTelegramMessage(successMsg, chatId, getInteractiveKeyboard(user));
+                    } else {
+                        await sendTelegramMessage(
+                            `❌ <b>Transfer Verification Failed</b>\n\n` +
+                            `<b>Reason:</b> ${transferRes.error}\n\n` +
+                            `Please enter the correct 6-digit OTP sent to the old Telegram account, or tap below to edit your Username:`,
+                            chatId,
+                            {
+                                inline_keyboard: [
+                                    [{ text: '✏️ Change Username', callback_data: 'action_change_username' }],
+                                    [{ text: '❌ Cancel Transfer', callback_data: 'action_cancel' }]
+                                ]
+                            }
                         );
                     }
                     return NextResponse.json({ ok: true });
@@ -171,6 +279,8 @@ export async function POST(request: Request) {
                     getInteractiveKeyboard(user)
                 );
             }
+        } else if (text.startsWith('/changeusername')) {
+            await handleChangeUsernameRequest(chatId, user);
         } else if (text.startsWith('/mark')) {
             await handleMarkAttendance(chatId, user);
         } else if (text.startsWith('/status')) {
@@ -256,6 +366,24 @@ async function startRegistrationWizard(chatId: string, telegramUsername?: string
         `<b>Step 1/2:</b> Please send your <b>HRone Username</b> (Mobile Number or Login ID):`;
 
     await sendTelegramMessage(welcomeText, chatId);
+}
+
+async function handleChangeUsernameRequest(chatId: string, user?: IUser | null) {
+    if (!user) {
+        await startRegistrationWizard(chatId);
+        return;
+    }
+    user.registrationState = 'AWAITING_HR_USERNAME';
+    user.pendingTransferTargetChatId = undefined;
+    user.transferOtp = undefined;
+    user.transferOtpExpiresAt = undefined;
+    await user.save();
+
+    await sendTelegramMessage(
+        `✏️ <b>Step 1/2: Enter HRone Username</b>\n\n` +
+        `Please send your correct <b>HRone Username</b> (Mobile Number or Login ID):`,
+        chatId
+    );
 }
 
 function normalizeDateInput(input?: string): string | undefined {
