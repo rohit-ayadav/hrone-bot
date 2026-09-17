@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
+import { randomBytes } from 'crypto';
 import { connectToDatabase } from '@/lib/db';
 import User, { IUser } from '@/models/User';
 import AttendanceLog from '@/models/AttendanceLog';
-import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
+import { markAttendance, getAttendanceHistory, getTodayAttendanceState, verifyHROneCredentials } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
 import {
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
         if (body.callback_query) {
             const callbackQuery = body.callback_query;
             const chatId = String(callbackQuery.message.chat.id);
+            const telegramUserId = String(callbackQuery.from?.id || '');
             const data = callbackQuery.data;
 
             await answerCallbackQuery(callbackQuery.id, 'Processing request...');
@@ -32,6 +34,8 @@ export async function POST(request: Request) {
                 await startRegistrationWizard(chatId, callbackQuery.from?.username);
             } else if (data === 'action_mark') {
                 await handleMarkAttendance(chatId, user);
+            } else if (data === 'action_forceout') {
+                await handleForceOutRequest(chatId, user);
             } else if (data === 'action_status') {
                 await handleStatusRequest(chatId, user);
             } else if (data === 'action_history') {
@@ -61,9 +65,17 @@ export async function POST(request: Request) {
                     user.pendingTransferTargetChatId = undefined;
                     user.transferOtp = undefined;
                     user.transferOtpExpiresAt = undefined;
+                    user.forceOutConfirmToken = undefined;
+                    user.forceOutConfirmExpiresAt = undefined;
                     await user.save();
                 }
                 await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
+            } else if (data.startsWith('action_forceout_confirm_')) {
+                const confirmToken = data.replace('action_forceout_confirm_', '');
+                await handleForceOutConfirmation(chatId, telegramUserId, confirmToken);
+            } else if (data.startsWith('action_forceout_cancel_')) {
+                const cancelToken = data.replace('action_forceout_cancel_', '');
+                await handleForceOutCancellation(chatId, telegramUserId, cancelToken);
             } else if (data === 'action_transfer_otp') {
                 if (user && user.pendingTransferTargetChatId) {
                     const targetUser = await User.findOne({ chatId: user.pendingTransferTargetChatId });
@@ -126,6 +138,8 @@ export async function POST(request: Request) {
                 user.pendingTransferTargetChatId = undefined;
                 user.transferOtp = undefined;
                 user.transferOtpExpiresAt = undefined;
+                user.forceOutConfirmToken = undefined;
+                user.forceOutConfirmExpiresAt = undefined;
                 await user.save();
                 await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
                 return NextResponse.json({ ok: true });
@@ -303,6 +317,8 @@ export async function POST(request: Request) {
             await handleChangeUsernameRequest(chatId, user);
         } else if (text.startsWith('/mark')) {
             await handleMarkAttendance(chatId, user);
+        } else if (text.startsWith('/forceout')) {
+            await handleForceOutRequest(chatId, user);
         } else if (text.startsWith('/status')) {
             await handleStatusRequest(chatId, user);
         } else if (text.startsWith('/history')) {
@@ -337,7 +353,7 @@ export async function POST(request: Request) {
         } else {
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance, /history to pick date history, or /settings for account info.`,
+                `Send /mark to punch attendance, /forceout for confirmed early punch-out, /history to pick date history, or /settings for account info.`,
                 chatId,
                 getInteractiveKeyboard(user)
             );
@@ -436,19 +452,53 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
         return;
     }
 
-    await sendTelegramMessage('⏳ <b>Processing attendance punch...</b>', chatId);
+    await performAttendancePunch(chatId, user);
+}
+
+function getAttendanceProfile(chatId: string, user: IUser) {
+    return {
+        chatId,
+        hrUsername: user.hrUsername,
+        hrPassword: user.hrPassword,
+        domainCode: user.domainCode,
+        employeeId: user.employeeId,
+        latitude: user.latitude,
+        longitude: user.longitude,
+        geoLocation: user.geoLocation,
+        geoAccuracy: user.geoAccuracy,
+    };
+}
+
+function formatDuration(durationMs: number): string {
+    const safeMs = Math.max(durationMs, 0);
+    const hours = Math.floor(safeMs / (1000 * 60 * 60));
+    const minutes = Math.floor((safeMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours}h ${minutes}m`;
+}
+
+function isAuthorizedForceOutCallback(chatId: string, telegramUserId: string): boolean {
+    return chatId === telegramUserId;
+}
+
+async function clearForceOutConfirmation(user: IUser | null | undefined) {
+    if (!user) return;
+    user.forceOutConfirmToken = undefined;
+    user.forceOutConfirmExpiresAt = undefined;
+    await user.save();
+}
+
+async function performAttendancePunch(
+    chatId: string,
+    user: IUser,
+    options?: {
+        overrideAction?: 'In' | 'Out';
+        processingMessage?: string;
+    }
+) {
+    await sendTelegramMessage(options?.processingMessage || '⏳ <b>Processing attendance punch...</b>', chatId);
 
     try {
-        const result = await markAttendance(undefined, {
-            hrUsername: user.hrUsername,
-            hrPassword: user.hrPassword,
-            domainCode: user.domainCode,
-            employeeId: user.employeeId,
-            latitude: user.latitude,
-            longitude: user.longitude,
-            geoLocation: user.geoLocation,
-            geoAccuracy: user.geoAccuracy,
-        });
+        const result = await markAttendance(options?.overrideAction, getAttendanceProfile(chatId, user));
 
         await AttendanceLog.create({
             chatId,
@@ -480,10 +530,11 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
 
         await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
     } catch (error: any) {
+        const fallbackAction = options?.overrideAction || (new Date().getHours() < 14 ? 'In' : 'Out');
         await AttendanceLog.create({
             chatId,
             hrUsername: user.hrUsername,
-            action: (new Date().getHours() < 14 ? 'In' : 'Out'),
+            action: fallbackAction,
             punchTime: new Date().toISOString(),
             status: 'FAILED',
             source: 'MANUAL',
@@ -502,6 +553,145 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
 
         await sendTelegramMessage(errorText, chatId, getFailureKeyboard(user));
     }
+}
+
+async function handleForceOutRequest(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your HRone account.', chatId);
+        return;
+    }
+
+    const todayState = await getTodayAttendanceState(getAttendanceProfile(chatId, user));
+
+    if (!todayState.hasPunchedInToday || !todayState.firstPunchDate) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage(
+            `⚠️ <b>No Check-In Found for Today</b>\n\n` +
+            `Please punch in first using <code>/mark</code>.`,
+            chatId,
+            getInteractiveKeyboard(user)
+        );
+        return;
+    }
+
+    if (todayState.hasPunchedOutToday) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage(
+            `ℹ️ <b>Already Punched Out</b>\n\n` +
+            `Your punch-out is already recorded today at <b>${todayState.outPunchTimeLabel || 'earlier today'}</b>.`,
+            chatId,
+            getInteractiveKeyboard(user)
+        );
+        return;
+    }
+
+    if ((todayState.elapsedHours ?? 0) >= 9) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage(
+            `✅ <b>9-Hour Requirement Already Met</b>\n\n` +
+            `You can punch out normally using <code>/mark</code>.`,
+            chatId,
+            getInteractiveKeyboard(user)
+        );
+        return;
+    }
+
+    const token = randomBytes(6).toString('hex');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    user.forceOutConfirmToken = token;
+    user.forceOutConfirmExpiresAt = expiresAt;
+    await user.save();
+
+    const eligibleAtText = (todayState.nineHourEligibleAt || new Date(todayState.firstPunchDate.getTime() + 9 * 60 * 60 * 1000))
+        .toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+    const warningText =
+        `⚠️ <b>Early Punch-Out Confirmation Required</b>\n\n` +
+        `You are about to force punch-out before 9 working hours.\n` +
+        `• <b>Elapsed:</b> ${formatDuration(todayState.elapsedMs ?? 0)}\n` +
+        `• <b>Remaining:</b> ${formatDuration(todayState.remainingMs ?? 0)}\n` +
+        `• <b>Normal eligibility:</b> ${eligibleAtText} IST\n\n` +
+        `Tap <b>Confirm</b> to continue, or <b>Cancel</b> to abort.\n` +
+        `<i>This confirmation expires in 10 minutes.</i>`;
+
+    await sendTelegramMessage(warningText, chatId, {
+        inline_keyboard: [
+            [{ text: '✅ Confirm Force Out', callback_data: `action_forceout_confirm_${token}` }],
+            [{ text: '❌ Cancel', callback_data: `action_forceout_cancel_${token}` }]
+        ]
+    });
+}
+
+async function handleForceOutCancellation(chatId: string, telegramUserId: string, token: string) {
+    if (!isAuthorizedForceOutCallback(chatId, telegramUserId)) {
+        await sendTelegramMessage('⛔ This force-out request does not belong to your Telegram account.', chatId);
+        return;
+    }
+
+    const user = await User.findOne({ chatId });
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ No active force-out confirmation was found.', chatId);
+        return;
+    }
+
+    if (!user.forceOutConfirmToken || user.forceOutConfirmToken !== token) {
+        await sendTelegramMessage('⚠️ This force-out confirmation is stale or already handled.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    await clearForceOutConfirmation(user);
+    await sendTelegramMessage('❌ <b>Force punch-out cancelled.</b>', chatId, getInteractiveKeyboard(user));
+}
+
+async function handleForceOutConfirmation(chatId: string, telegramUserId: string, token: string) {
+    if (!isAuthorizedForceOutCallback(chatId, telegramUserId)) {
+        await sendTelegramMessage('⛔ This force-out request does not belong to your Telegram account.', chatId);
+        return;
+    }
+
+    const user = await User.findOne({ chatId });
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered or currently unavailable for force punch-out.', chatId);
+        return;
+    }
+
+    if (!user.forceOutConfirmToken || user.forceOutConfirmToken !== token) {
+        await sendTelegramMessage('⚠️ This force-out confirmation is stale or already handled.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    if (!user.forceOutConfirmExpiresAt || user.forceOutConfirmExpiresAt.getTime() < Date.now()) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage('⌛ Force-out confirmation expired. Send <code>/forceout</code> again if needed.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    const todayState = await getTodayAttendanceState(getAttendanceProfile(chatId, user));
+    if (!todayState.hasPunchedInToday || !todayState.firstPunchDate) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage('⚠️ No valid check-in found for today. Please use <code>/mark</code> first.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+    if (todayState.hasPunchedOutToday) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage('ℹ️ You are already punched out for today. No additional action needed.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+    if ((todayState.elapsedHours ?? 0) >= 9) {
+        await clearForceOutConfirmation(user);
+        await sendTelegramMessage('✅ You have already completed 9 hours. Please use <code>/mark</code> for normal punch-out.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    await clearForceOutConfirmation(user);
+    await performAttendancePunch(chatId, user, {
+        overrideAction: 'Out',
+        processingMessage: '⏳ <b>Processing confirmed early punch-out...</b>'
+    });
 }
 
 async function handleDatePickerRequest(chatId: string) {
@@ -814,6 +1004,7 @@ async function handleHelpRequest(chatId: string, user?: IUser | null) {
         `❓ <b>HROne Bot Help & User Guide</b>\n\n` +
         `<b>Available Bot Commands:</b>\n` +
         `• /mark - Punch attendance (Auto In/Out based on 9-hr rule)\n` +
+        `• /forceout - Force early punch-out with explicit confirmation\n` +
         `• /history - Open 1–31 day calendar date picker\n` +
         `• /myhistory - View your MongoDB audit punch logs\n` +
         `• /stats - View monthly attendance analytics & hours\n` +
@@ -825,6 +1016,7 @@ async function handleHelpRequest(chatId: string, user?: IUser | null) {
         `⏰ <b>9-Hour Working Shift Rule:</b>\n` +
         `• First punch of the day is automatically recorded as <b>Check-In</b>.\n` +
         `• <b>Punch Out</b> is only permitted after <b>9 working hours</b> have passed since Check-In.\n` +
+        `• Use <code>/forceout</code> only when you need an early punch-out and confirm it explicitly.\n` +
         `• If you have already Punched Out in DB today, automated cron punches skip gracefully.\n\n` +
         `Tap any interactive button below to navigate:`;
 
@@ -874,10 +1066,13 @@ function getInteractiveKeyboard(user?: IUser | null) {
         inline_keyboard: [
             [
                 { text: '📍 Punch Attendance Now', callback_data: 'action_mark' },
-                { text: '📊 Today Logs', callback_data: 'action_history' }
+                { text: '⚠️ Force Out', callback_data: 'action_forceout' }
             ],
             [
-                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
+                { text: '📊 Today Logs', callback_data: 'action_history' },
+                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' }
+            ],
+            [
                 { text: '💾 DB Punch Logs', callback_data: 'action_myhistory' }
             ],
             [

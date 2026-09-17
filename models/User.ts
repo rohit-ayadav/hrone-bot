@@ -23,6 +23,8 @@ export interface IUser extends Document {
   transferOtp?: string;
   transferOtpExpiresAt?: Date;
   pendingTransferTargetChatId?: string;
+  forceOutConfirmToken?: string;
+  forceOutConfirmExpiresAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +57,8 @@ const UserSchema: Schema<IUser> = new Schema<IUser>(
     transferOtp: { type: String, default: undefined },
     transferOtpExpiresAt: { type: Date, default: undefined },
     pendingTransferTargetChatId: { type: String, default: undefined },
+    forceOutConfirmToken: { type: String, default: undefined },
+    forceOutConfirmExpiresAt: { type: Date, default: undefined },
   },
   { timestamps: true }
 );
