@@ -23,6 +23,19 @@ export interface MarkAttendanceResult {
     response: any;
 }
 
+export interface TodayAttendanceState {
+    now: Date;
+    todayStr: string;
+    hasPunchedInToday: boolean;
+    hasPunchedOutToday: boolean;
+    firstPunchDate: Date | null;
+    outPunchTimeLabel: string | null;
+    elapsedMs: number | null;
+    elapsedHours: number | null;
+    nineHourEligibleAt: Date | null;
+    remainingMs: number | null;
+}
+
 export interface VerifyHROneResult {
     valid: boolean;
     tokenData?: any;
@@ -218,6 +231,74 @@ function formatTimeString(date: Date): string {
     return `${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
 }
 
+export async function getTodayAttendanceState(profile?: UserProfile): Promise<TodayAttendanceState> {
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    let firstPunchDate: Date | null = null;
+    let hasPunchedInToday = false;
+    let hasPunchedOutToday = false;
+    let outPunchTimeLabel: string | null = null;
+    let elapsedMs: number | null = null;
+    let elapsedHours: number | null = null;
+    let nineHourEligibleAt: Date | null = null;
+    let remainingMs: number | null = null;
+
+    try {
+        await connectToDatabase();
+        const queryFilter: any = {
+            status: 'SUCCESS',
+            punchTime: { $regex: todayStr }
+        };
+        if (profile?.chatId) {
+            queryFilter.chatId = profile.chatId;
+        } else if (profile?.hrUsername) {
+            queryFilter.hrUsername = profile.hrUsername;
+        }
+
+        const todayLogs = await AttendanceLog.find(queryFilter).sort({ createdAt: 1 });
+
+        if (todayLogs && todayLogs.length > 0) {
+            const inLog = todayLogs.find((l: any) => l.action === 'In');
+            if (inLog) {
+                hasPunchedInToday = true;
+                firstPunchDate = parseTimeStringToDate(todayStr, inLog.punchTime);
+            }
+
+            const outLog = todayLogs.find((l: any) => l.action === 'Out');
+            if (outLog) {
+                hasPunchedOutToday = true;
+                const parsedOut = parseTimeStringToDate(todayStr, outLog.punchTime);
+                outPunchTimeLabel = parsedOut ? formatTimeString(parsedOut) : outLog.punchTime;
+            }
+        }
+    } catch (e) {
+        console.error('Warning: Error reading AttendanceLog from MongoDB:', e);
+    }
+
+    if (firstPunchDate) {
+        elapsedMs = now.getTime() - firstPunchDate.getTime();
+        elapsedHours = elapsedMs / (1000 * 60 * 60);
+        nineHourEligibleAt = new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
+        remainingMs = nineHourEligibleAt.getTime() - now.getTime();
+    }
+
+    return {
+        now,
+        todayStr,
+        hasPunchedInToday,
+        hasPunchedOutToday,
+        firstPunchDate,
+        outPunchTimeLabel,
+        elapsedMs,
+        elapsedHours,
+        nineHourEligibleAt,
+        remainingMs,
+    };
+}
+
 export async function markAttendance(
     overrideAction?: 'In' | 'Out',
     profile?: UserProfile
@@ -276,62 +357,33 @@ export async function markAttendance(
     const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
     const punchTime = `${todayStr}T${pad(istParts.hour)}:${pad(istParts.minute)}`;
 
-    // 3. Check OUR MongoDB AttendanceLog collection EXCLUSIVELY for today's punch state
-    let firstPunchDate: Date | null = null;
-    let hasPunchedInToday = false;
-    let hasPunchedOutToday = false;
-    let timeOutStr: string | null = null;
-
-    try {
-        await connectToDatabase();
-        const queryFilter: any = {
-            status: 'SUCCESS',
-            punchTime: { $regex: todayStr }
-        };
-        if (profile?.chatId) {
-            queryFilter.chatId = profile.chatId;
-        } else if (username) {
-            queryFilter.hrUsername = username;
-        }
-
-        const todayLogs = await AttendanceLog.find(queryFilter).sort({ createdAt: 1 });
-
-        if (todayLogs && todayLogs.length > 0) {
-            const inLog = todayLogs.find((l: any) => l.action === 'In');
-            if (inLog) {
-                hasPunchedInToday = true;
-                firstPunchDate = parseTimeStringToDate(todayStr, inLog.punchTime);
-            }
-
-            const outLog = todayLogs.find((l: any) => l.action === 'Out');
-            if (outLog) {
-                hasPunchedOutToday = true;
-                const parsedOut = parseTimeStringToDate(todayStr, outLog.punchTime);
-                timeOutStr = parsedOut ? formatTimeString(parsedOut) : outLog.punchTime;
-            }
-        }
-    } catch (e) {
-        console.error('Warning: Error reading AttendanceLog from MongoDB:', e);
-    }
+    // 3. Check MongoDB AttendanceLog collection for today's punch state
+    const todayState = await getTodayAttendanceState({
+        chatId: profile?.chatId,
+        hrUsername: username,
+    });
 
     // Determine Punch Action based on today's state & 9-hour rule
     let action: 'In' | 'Out';
 
     if (overrideAction) {
         action = overrideAction;
-    } else if (!hasPunchedInToday || !firstPunchDate) {
+    } else if (!todayState.hasPunchedInToday || !todayState.firstPunchDate) {
         action = 'In';
-    } else if (hasPunchedOutToday) {
+    } else if (todayState.hasPunchedOutToday) {
         throw new Error(
-            `Already Punched Out today (Recorded at ${timeOutStr || 'earlier today'}). No further automated punch required.`
+            `Already Punched Out today (Recorded at ${todayState.outPunchTimeLabel || 'earlier today'}). No further automated punch required.`
         );
     } else {
         // User has checked in today, but not checked out! Check if 9 hours have elapsed.
-        const elapsedMs = now.getTime() - firstPunchDate.getTime();
-        const elapsedHours = elapsedMs / (1000 * 60 * 60);
+        const firstPunchDate = todayState.firstPunchDate;
+        if (!firstPunchDate) {
+            action = 'In';
+        } else {
+        const elapsedHours = todayState.elapsedHours ?? 0;
 
         if (elapsedHours < 9) {
-            const targetOutDate = new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
+            const targetOutDate = todayState.nineHourEligibleAt || new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
             const remainingMs = targetOutDate.getTime() - now.getTime();
             const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
             const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
@@ -346,6 +398,7 @@ export async function markAttendance(
         }
 
         action = 'Out';
+        }
     }
 
     const requestPayload = {
