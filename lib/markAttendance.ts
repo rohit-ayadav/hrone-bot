@@ -362,7 +362,7 @@ export async function markAttendance(
         uploadedPhotoOnePath: '',
         uploadedPhotoTwoName: '',
         uploadedPhotoTwoPath: '',
-        attendanceSource: 'A',
+        attendanceSource: 'M',
         attendanceType: 'Online',
     };
 
