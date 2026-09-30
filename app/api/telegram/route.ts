@@ -50,6 +50,10 @@ export async function POST(request: Request) {
                 await handleExtendPunchOut(chatId, user, 60);
             } else if (data === 'action_skip_out_today') {
                 await handleSkipOutToday(chatId, user);
+            } else if (data === 'action_prompt_early_out') {
+                await handlePromptEarlyOut(chatId, user);
+            } else if (data === 'action_confirm_early_out') {
+                await handleConfirmEarlyOut(chatId, user);
             } else if (data === 'action_set_wfh_loc') {
                 await handleSetWfhCommand(chatId, user);
             } else if (data === 'action_set_office_loc') {
@@ -574,7 +578,23 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
             `<b>Timestamp:</b> ${istTime} (IST)${gatewayTip}\n` +
             (error.stack ? `<b>Stack Trace:</b>\n<pre><code>${error.stack.substring(0, 800)}</code></pre>` : '');
 
-        await sendTelegramMessage(errorText, chatId, getFailureKeyboard(user));
+        const isNineHourBlock = error.message && error.message.includes('Minimum 9 working hours');
+        const failureKeyboard = isNineHourBlock
+            ? {
+                inline_keyboard: [
+                    [
+                        { text: '⚡ Punch Out Anyway (Early Out)', callback_data: 'action_prompt_early_out' },
+                        { text: '⏳ Extend +30m', callback_data: 'action_extend_30' }
+                    ],
+                    [
+                        { text: 'ℹ️ Check Today Logs', callback_data: 'action_history' },
+                        { text: '⚙️ Settings', callback_data: 'action_settings' }
+                    ]
+                ]
+            }
+            : getFailureKeyboard(user);
+
+        await sendTelegramMessage(errorText, chatId, failureKeyboard);
     }
 }
 
@@ -1208,4 +1228,155 @@ function getFailureKeyboard(user?: IUser | null) {
             ]
         ]
     };
+}
+
+async function handlePromptEarlyOut(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
+        return;
+    }
+
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    const todayLogs = await AttendanceLog.find({
+        $or: [{ chatId }, { hrUsername: user.hrUsername }],
+        status: 'SUCCESS',
+        punchTime: { $regex: todayStr }
+    }).sort({ createdAt: 1 });
+
+    const inLog = todayLogs.find((l) => l.action === 'In');
+    const outLog = todayLogs.find((l) => l.action === 'Out');
+
+    if (outLog) {
+        await sendTelegramMessage('✅ You have already Punched Out today.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    if (!inLog) {
+        await sendTelegramMessage('⚠️ No Check-In record was found for today. You cannot punch out before checking in.', chatId, getInteractiveKeyboard(user));
+        return;
+    }
+
+    const inTime = new Date(inLog.punchTime);
+    const elapsedMs = now.getTime() - inTime.getTime();
+    const elapsedHours = elapsedMs / (1000 * 60 * 60);
+
+    let extraMinutes = 0;
+    if (user.outPunchExtensionDate === todayStr && user.outPunchExtensionMinutes) {
+        extraMinutes = user.outPunchExtensionMinutes;
+    }
+    const requiredHours = 9 + (extraMinutes / 60);
+    const targetOutDate = new Date(inTime.getTime() + (requiredHours * 60 * 60 * 1000));
+    const remainingMs = Math.max(0, targetOutDate.getTime() - now.getTime());
+    const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
+    const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+
+    const inParts = getISTParts(inTime);
+    const inHour = inParts.hour % 12 || 12;
+    const inAmpm = inParts.hour >= 12 ? 'PM' : 'AM';
+    const inTimeStr = `${pad(inHour)}:${pad(inParts.minute)} ${inAmpm}`;
+
+    const promptText =
+        `⚠️ <b>Early Punch-Out Confirmation</b>\n\n` +
+        `<b>Account:</b> ${user.hrUsername}\n` +
+        `• <b>Check-In Time:</b> ${inTimeStr} IST\n` +
+        `• <b>Worked So Far:</b> ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m\n` +
+        `• <b>Shift Shortage:</b> ${remHours}h ${remMins}m short of 9 hours\n\n` +
+        `Are you sure you want to mark <b>Punch Out</b> early?`;
+
+    await sendTelegramMessage(promptText, chatId, {
+        inline_keyboard: [
+            [
+                { text: '✅ Yes, Confirm Early Punch-Out', callback_data: 'action_confirm_early_out' }
+            ],
+            [
+                { text: '⏳ Extend +30m Instead', callback_data: 'action_extend_30' },
+                { text: '❌ Cancel', callback_data: 'action_cancel' }
+            ]
+        ]
+    });
+}
+
+async function handleConfirmEarlyOut(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
+        return;
+    }
+
+    await sendTelegramMessage('⏳ <b>Processing early attendance punch out...</b>', chatId);
+
+    try {
+        const result = await markAttendance('Out', {
+            hrUsername: user.hrUsername,
+            hrPassword: user.hrPassword,
+            domainCode: user.domainCode,
+            employeeId: user.employeeId,
+            workMode: user.workMode,
+            officeLatitude: user.officeLatitude,
+            officeLongitude: user.officeLongitude,
+            officeGeoLocation: user.officeGeoLocation,
+            wfhLatitude: user.wfhLatitude,
+            wfhLongitude: user.wfhLongitude,
+            wfhGeoLocation: user.wfhGeoLocation,
+            latitude: user.latitude,
+            longitude: user.longitude,
+            geoLocation: user.geoLocation,
+            geoAccuracy: user.geoAccuracy,
+            outPunchExtensionMinutes: user.outPunchExtensionMinutes,
+            outPunchExtensionDate: user.outPunchExtensionDate,
+            skipPunchOutDate: user.skipPunchOutDate,
+        }, { allowEarlyOut: true });
+
+        await AttendanceLog.create({
+            chatId,
+            hrUsername: user.hrUsername,
+            action: 'Out',
+            punchTime: result.punchTime,
+            status: 'SUCCESS',
+            source: 'MANUAL',
+            requestPayload: result.requestPayload,
+            responsePayload: result.response,
+        });
+
+        const reqJson = JSON.stringify(result.requestPayload, null, 2);
+        const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
+
+        const resJson = JSON.stringify(result.response, null, 2);
+        const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
+
+        const modeBadge = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+        const successText =
+            `✅ <b>Early Attendance Punched Successfully!</b>\n\n` +
+            `<b>Account:</b> ${user.hrUsername}\n` +
+            `<b>Action:</b> Punch Out ⚠️ (Early Sign-Off)\n` +
+            `<b>Time:</b> ${result.punchTime} (IST)\n` +
+            `<b>Work Mode:</b> ${modeBadge}\n` +
+            `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n\n` +
+            `<b>📤 Sent Request Payload:</b>\n` +
+            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
+            `<b>📥 Received API Response:</b>\n` +
+            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
+
+        await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
+    } catch (error: any) {
+        await AttendanceLog.create({
+            chatId,
+            hrUsername: user.hrUsername,
+            action: 'Out',
+            punchTime: new Date().toISOString(),
+            status: 'FAILED',
+            source: 'MANUAL',
+            errorMessage: error.message || 'Early punch out failed',
+        });
+
+        const errorText =
+            `❌ <b>Early Punch-Out Failed!</b>\n\n` +
+            `<b>Account:</b> ${user.hrUsername}\n` +
+            `<b>Error:</b> ${error.message || 'Unknown error'}`;
+
+        await sendTelegramMessage(errorText, chatId, getFailureKeyboard(user));
+    }
 }

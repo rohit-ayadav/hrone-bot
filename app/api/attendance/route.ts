@@ -5,6 +5,9 @@ import AttendanceLog from '@/models/AttendanceLog';
 import { markAttendance } from '@/lib/markAttendance';
 import { sendTelegramMessage } from '@/lib/telegram';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // Allow sufficient duration for multi-user randomized human execution delays
+
 export async function GET(request: Request) {
     // 1. Security: Prevent unauthorized triggers
     const { searchParams } = new URL(request.url);
@@ -36,10 +39,37 @@ export async function GET(request: Request) {
             } as any];
         }
 
+        const enableJitter = searchParams.get('jitter') !== 'false';
         const results: any[] = [];
 
-        // 3. Execute attendance mark for each active user
-        for (const user of users) {
+        // Randomize the order of users to prevent predictable, robotic execution sequences across triggers
+        if (enableJitter && users.length > 1) {
+            for (let i = users.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [users[i], users[j]] = [users[j], users[i]];
+            }
+            console.log(`[Human Jitter] Shuffled execution order for ${users.length} users: ${users.map((u: any) => u.hrUsername).join(', ')}`);
+        }
+
+        // 3. Execute attendance mark for each active user with real-time execution jitter
+        for (let i = 0; i < users.length; i++) {
+            const user = users[i];
+            let jitterDelayMs = 0;
+
+            // Apply randomized human execution delay to prevent synchronized robot punch patterns
+            if (enableJitter) {
+                // Initial delay for the 1st user: 3s to 18s (or custom min/max)
+                // Subsequent delays between different users: 10s to 35s (or custom min/max)
+                const defaultMin = i === 0 ? 3 : 10;
+                const defaultMax = i === 0 ? 18 : 35;
+                const minSec = searchParams.get('minDelay') ? Math.max(0, parseInt(searchParams.get('minDelay')!, 10)) : defaultMin;
+                const maxSec = searchParams.get('maxDelay') ? Math.max(minSec, parseInt(searchParams.get('maxDelay')!, 10)) : defaultMax;
+                jitterDelayMs = Math.floor((minSec * 1000) + Math.random() * ((maxSec - minSec) * 1000));
+
+                console.log(`[Human Jitter] Random User #${i + 1}/${users.length} (${user.hrUsername}): Waiting ${(jitterDelayMs / 1000).toFixed(1)}s before punching...`);
+                await new Promise((r) => setTimeout(r, jitterDelayMs));
+            }
+
             try {
                 const result = await markAttendance(undefined, {
                     hrUsername: user.hrUsername,
@@ -69,10 +99,11 @@ export async function GET(request: Request) {
                 const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
 
                 const workModeDisplay = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+                const earlyBadge = result.isEarlyOut ? ' ⚠️ (Early Punch-Out)' : '';
                 const successMessage =
                     `⏰ <b>Automated Attendance Triggered (Success)</b>\n\n` +
                     `<b>Account:</b> ${user.hrUsername}\n` +
-                    `<b>Action:</b> Punch ${result.action}\n` +
+                    `<b>Action:</b> Punch ${result.action}${earlyBadge}\n` +
                     `<b>Punch Time:</b> ${result.punchTime} (IST)\n` +
                     `<b>Work Mode:</b> ${workModeDisplay}\n` +
                     `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n` +
@@ -110,6 +141,7 @@ export async function GET(request: Request) {
                     chatId: user.chatId,
                     username: user.hrUsername,
                     status: 'success',
+                    jitterDelaySeconds: Math.round(jitterDelayMs / 100) / 10,
                     result,
                 });
             } catch (userErr: any) {
@@ -149,6 +181,7 @@ export async function GET(request: Request) {
                         chatId: user.chatId,
                         username: user.hrUsername,
                         status: 'skipped',
+                        jitterDelaySeconds: Math.round(jitterDelayMs / 100) / 10,
                         reason: userErr.message,
                     });
                 } else {
@@ -198,6 +231,7 @@ export async function GET(request: Request) {
                         chatId: user.chatId,
                         username: user.hrUsername,
                         status: 'failed',
+                        jitterDelaySeconds: Math.round(jitterDelayMs / 100) / 10,
                         error: userErr.message,
                     });
                 }

@@ -25,11 +25,16 @@ export interface UserProfile {
     skipPunchOutDate?: string;
 }
 
+export interface MarkAttendanceOptions {
+    allowEarlyOut?: boolean;
+}
+
 export interface MarkAttendanceResult {
     success: boolean;
     action: 'In' | 'Out';
     punchTime: string;
     workMode?: 'OFFICE' | 'WFH';
+    isEarlyOut?: boolean;
     requestPayload: any;
     response: any;
 }
@@ -151,14 +156,17 @@ export function getEffectiveUserLocation(profile?: UserProfile): {
 }
 
 /**
- * Adds natural GPS micro-variance (approx ±5-10 meters) so coordinates simulate real device GPS fluctuations.
+ * Adds natural GPS micro-variance strictly constrained to ±3 to 6 meters.
+ * Prevents static bot footprints while strictly respecting office geofences.
  */
-export function applyGpsJitter(latStr: string, lngStr: string): { latitude: string; longitude: string } {
+export function applyGpsJitter(latStr: string, lngStr: string, maxMeters = 5): { latitude: string; longitude: string } {
     const lat = parseFloat(latStr);
     const lng = parseFloat(lngStr);
     if (isNaN(lat) || isNaN(lng)) return { latitude: latStr, longitude: lngStr };
-    const latJitter = (Math.random() - 0.5) * 0.00010;
-    const lngJitter = (Math.random() - 0.5) * 0.00010;
+    // 0.00001 deg is approx 1.11m. maxMeters 5 = ~0.000045 deg.
+    const maxDelta = maxMeters / 111000;
+    const latJitter = (Math.random() - 0.5) * 2 * maxDelta;
+    const lngJitter = (Math.random() - 0.5) * 2 * maxDelta;
     return {
         latitude: (lat + latJitter).toFixed(14),
         longitude: (lng + lngJitter).toFixed(14),
@@ -351,7 +359,8 @@ function formatTimeString(date: Date): string {
 
 export async function markAttendance(
     overrideAction?: 'In' | 'Out',
-    profile?: UserProfile
+    profile?: UserProfile,
+    options?: MarkAttendanceOptions
 ): Promise<MarkAttendanceResult> {
     const username = profile?.hrUsername || process.env.HR_USERNAME;
     const rawPassword = profile?.hrPassword || process.env.HR_PASSWORD;
@@ -459,9 +468,17 @@ export async function markAttendance(
 
     // Determine Punch Action based on today's state & 9-hour rule (+ any overtime extensions)
     let action: 'In' | 'Out';
+    let isEarlyOut = false;
 
     if (overrideAction) {
         action = overrideAction;
+        if (action === 'Out' && firstPunchDate) {
+            const elapsedMs = now.getTime() - firstPunchDate.getTime();
+            const elapsedHours = elapsedMs / (1000 * 60 * 60);
+            if (elapsedHours < 9) {
+                isEarlyOut = true;
+            }
+        }
     } else if (!hasPunchedInToday || !firstPunchDate) {
         action = 'In';
     } else if (hasPunchedOutToday) {
@@ -480,19 +497,23 @@ export async function markAttendance(
         const requiredHours = 9 + (extraMinutes / 60);
 
         if (elapsedHours < requiredHours) {
-            const targetOutDate = new Date(firstPunchDate.getTime() + (requiredHours * 60 * 60 * 1000));
-            const remainingMs = targetOutDate.getTime() - now.getTime();
-            const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
-            const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-            const inTimeFormatted = formatTimeString(firstPunchDate);
-            const outTimeFormatted = formatTimeString(targetOutDate);
-            const extNotice = extraMinutes > 0 ? ` (+${extraMinutes}m shift extension applied)` : '';
+            if (options?.allowEarlyOut) {
+                isEarlyOut = true;
+            } else {
+                const targetOutDate = new Date(firstPunchDate.getTime() + (requiredHours * 60 * 60 * 1000));
+                const remainingMs = targetOutDate.getTime() - now.getTime();
+                const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
+                const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+                const inTimeFormatted = formatTimeString(firstPunchDate);
+                const outTimeFormatted = formatTimeString(targetOutDate);
+                const extNotice = extraMinutes > 0 ? ` (+${extraMinutes}m shift extension applied)` : '';
 
-            throw new Error(
-                `Check-In recorded today at ${inTimeFormatted} IST. Minimum 9 working hours${extNotice} required before Punch Out.\n` +
-                `Time Elapsed: ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m.\n` +
-                `Eligible for Punch Out after ${outTimeFormatted} IST (${remHours}h ${remMins}m remaining).`
-            );
+                throw new Error(
+                    `Check-In recorded today at ${inTimeFormatted} IST. Minimum 9 working hours${extNotice} required before Punch Out.\n` +
+                    `Time Elapsed: ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m.\n` +
+                    `Eligible for Punch Out after ${outTimeFormatted} IST (${remHours}h ${remMins}m remaining).`
+                );
+            }
         }
 
         action = 'Out';
@@ -549,6 +570,7 @@ export async function markAttendance(
         action,
         punchTime,
         workMode: effectiveLoc.workMode,
+        isEarlyOut,
         requestPayload,
         response: attendanceData,
     };

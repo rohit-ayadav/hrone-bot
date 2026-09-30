@@ -138,10 +138,14 @@ export async function GET(request: Request) {
                         ? `<i>Automated punch-out is paused for today. You can still punch out manually anytime.</i>`
                         : `<i>Automated punch-out will trigger once your shift requirement is satisfied.</i>`);
 
+                const punchOutButton = isEligibleNow
+                    ? { text: '⚡ Punch Out Now', callback_data: 'action_mark' }
+                    : { text: '⚡ Punch Out (Early Out)', callback_data: 'action_prompt_early_out' };
+
                 await sendTelegramMessage(alertMessage, user.chatId, {
                     inline_keyboard: [
                         [
-                            { text: '⚡ Punch Out Now', callback_data: 'action_mark' },
+                            punchOutButton,
                             { text: '⏳ Extend +30m', callback_data: 'action_extend_30' }
                         ],
                         [
