@@ -126,6 +126,16 @@ export async function fetchWithRetry(
 }
 
 /**
+ * Standard default office location (altF Coworking Space, Sector 142, Noida)
+ */
+export const DEFAULT_OFFICE_LOCATION = {
+    latitude: '28.500385614012345',
+    longitude: '77.41499672380527',
+    geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
+    geoAccuracy: '10'
+};
+
+/**
  * Returns the effective punch location (Office vs WFH) based on the user's active workMode.
  */
 export function getEffectiveUserLocation(profile?: UserProfile): {
@@ -137,20 +147,20 @@ export function getEffectiveUserLocation(profile?: UserProfile): {
 } {
     const isWfh = profile?.workMode === 'WFH';
     const lat = isWfh
-        ? (profile?.wfhLatitude || profile?.latitude || '28.500385614012345')
-        : (profile?.officeLatitude || profile?.latitude || '28.500385614012345');
+        ? (profile?.wfhLatitude || profile?.latitude || DEFAULT_OFFICE_LOCATION.latitude)
+        : (profile?.officeLatitude || profile?.latitude || DEFAULT_OFFICE_LOCATION.latitude);
     const lng = isWfh
-        ? (profile?.wfhLongitude || profile?.longitude || '77.41499672380527')
-        : (profile?.officeLongitude || profile?.longitude || '77.41499672380527');
+        ? (profile?.wfhLongitude || profile?.longitude || DEFAULT_OFFICE_LOCATION.longitude)
+        : (profile?.officeLongitude || profile?.longitude || DEFAULT_OFFICE_LOCATION.longitude);
     const loc = isWfh
         ? (profile?.wfhGeoLocation || 'Home / WFH Location')
-        : (profile?.officeGeoLocation || profile?.geoLocation || '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India');
+        : (profile?.officeGeoLocation || profile?.geoLocation || DEFAULT_OFFICE_LOCATION.geoLocation);
 
     return {
         latitude: lat,
         longitude: lng,
         geoLocation: loc,
-        geoAccuracy: profile?.geoAccuracy || '10',
+        geoAccuracy: profile?.geoAccuracy || DEFAULT_OFFICE_LOCATION.geoAccuracy,
         workMode: isWfh ? 'WFH' : 'OFFICE',
     };
 }

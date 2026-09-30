@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/db';
 import User from '@/models/User';
 import AttendanceLog from '@/models/AttendanceLog';
-import { markAttendance } from '@/lib/markAttendance';
+import { markAttendance, DEFAULT_OFFICE_LOCATION } from '@/lib/markAttendance';
 import { sendTelegramMessage } from '@/lib/telegram';
 
 export const dynamic = 'force-dynamic';
@@ -30,10 +30,14 @@ export async function GET(request: Request) {
                 hrPassword: process.env.HR_PASSWORD,
                 domainCode: 'uharvest',
                 employeeId: 4050,
-                latitude: '28.500385614012345',
-                longitude: '77.41499672380527',
-                geoAccuracy: '10',
-                geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
+                workMode: 'OFFICE',
+                officeLatitude: DEFAULT_OFFICE_LOCATION.latitude,
+                officeLongitude: DEFAULT_OFFICE_LOCATION.longitude,
+                officeGeoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
+                latitude: DEFAULT_OFFICE_LOCATION.latitude,
+                longitude: DEFAULT_OFFICE_LOCATION.longitude,
+                geoAccuracy: DEFAULT_OFFICE_LOCATION.geoAccuracy,
+                geoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
                 autoMarkEnabled: true,
                 registrationState: 'IDLE',
             } as any];

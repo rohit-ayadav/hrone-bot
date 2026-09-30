@@ -7,7 +7,8 @@ import {
     getAttendanceHistory,
     verifyHROneCredentials,
     getISTParts,
-    getEffectiveUserLocation
+    getEffectiveUserLocation,
+    DEFAULT_OFFICE_LOCATION
 } from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
@@ -58,6 +59,10 @@ export async function POST(request: Request) {
                 await handleSetWfhCommand(chatId, user);
             } else if (data === 'action_set_office_loc') {
                 await handleSetOfficeCommand(chatId, user);
+            } else if (data === 'action_reset_office_default') {
+                await handleResetOfficeCommand(chatId, user);
+            } else if (data === 'action_share_gps_office') {
+                await handleLocationUpdateRequest(chatId, user, 'OFFICE');
             } else if (data === 'action_status') {
                 await handleStatusRequest(chatId, user);
             } else if (data === 'action_history') {
@@ -236,6 +241,18 @@ export async function POST(request: Request) {
 
                         user.registrationState = 'IDLE';
                         user.autoMarkEnabled = true;
+                        if (!user.officeGeoLocation) {
+                            user.officeLatitude = DEFAULT_OFFICE_LOCATION.latitude;
+                            user.officeLongitude = DEFAULT_OFFICE_LOCATION.longitude;
+                            user.officeGeoLocation = DEFAULT_OFFICE_LOCATION.geoLocation;
+                            user.latitude = DEFAULT_OFFICE_LOCATION.latitude;
+                            user.longitude = DEFAULT_OFFICE_LOCATION.longitude;
+                            user.geoLocation = DEFAULT_OFFICE_LOCATION.geoLocation;
+                            user.geoAccuracy = DEFAULT_OFFICE_LOCATION.geoAccuracy;
+                        }
+                        if (!user.workMode) {
+                            user.workMode = 'OFFICE';
+                        }
                         if (telegramUsername) user.telegramUsername = telegramUsername;
                         await user.save();
 
@@ -352,6 +369,8 @@ export async function POST(request: Request) {
             const parts = text.split(' ');
             const customAddr = parts.slice(1).join(' ').trim();
             await handleSetOfficeCommand(chatId, user, customAddr);
+        } else if (text.startsWith('/resetoffice') || text.startsWith('/defaultoffice')) {
+            await handleResetOfficeCommand(chatId, user);
         } else if (text.startsWith('/extend')) {
             const parts = text.split(' ');
             const mins = parseInt(parts[1] || '30', 10) || 30;
@@ -428,7 +447,15 @@ async function startRegistrationWizard(chatId: string, telegramUsername?: string
             telegramUsername,
             hrUsername: 'pending',
             hrPassword: 'pending',
-            registrationState: 'AWAITING_HR_USERNAME'
+            registrationState: 'AWAITING_HR_USERNAME',
+            workMode: 'OFFICE',
+            officeLatitude: DEFAULT_OFFICE_LOCATION.latitude,
+            officeLongitude: DEFAULT_OFFICE_LOCATION.longitude,
+            officeGeoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
+            latitude: DEFAULT_OFFICE_LOCATION.latitude,
+            longitude: DEFAULT_OFFICE_LOCATION.longitude,
+            geoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
+            geoAccuracy: DEFAULT_OFFICE_LOCATION.geoAccuracy,
         });
     } else {
         user.registrationState = 'AWAITING_HR_USERNAME';
@@ -745,7 +772,7 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
     const deptDisplay = user.department ? `\n<b>Department:</b> ${user.department}` : '';
     const companyDisplay = user.company ? `\n<b>Company:</b> ${user.company}` : '';
     const workModeDisplay = user.workMode === 'WFH' ? '🏠 WFH (Work From Home)' : '🏢 Office';
-    const officeAddr = user.officeGeoLocation || user.geoLocation || 'altF Coworking, Sector 142 Noida';
+    const officeAddr = user.officeGeoLocation || user.geoLocation || DEFAULT_OFFICE_LOCATION.geoLocation;
     const wfhAddr = user.wfhGeoLocation || '<i>Not set yet (tap button below to set)</i>';
 
     const now = new Date();
@@ -778,6 +805,7 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
         `• /wfh or /office - Directly switch work mode\n` +
         `• /setwfh &lt;address&gt; - Set your Home/WFH location\n` +
         `• /setoffice &lt;address&gt; - Set your Office location\n` +
+        `• /resetoffice - Reset office to default (altF Coworking)\n` +
         `• /extend &lt;mins&gt; - Extend today's shift (e.g. /extend 30)\n` +
         `• /toggleauto - Enable or disable automated cron punch\n` +
         `• /updatecreds - Update HRone username/password\n` +
@@ -795,7 +823,10 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
                 { text: '🏢 Set Office Location', callback_data: 'action_set_office_loc' }
             ],
             [
-                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' },
+                { text: '🏢 Reset Office to altF', callback_data: 'action_reset_office_default' },
+                { text: user.autoMarkEnabled ? '⏸️ Disable Auto' : '▶️ Enable Auto', callback_data: 'action_toggle_auto' }
+            ],
+            [
                 { text: '📍 Punch Attendance Now', callback_data: 'action_mark' }
             ]
         ]
@@ -862,7 +893,7 @@ async function handleToggleWorkMode(chatId: string, user: IUser | null) {
 
         await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
     } else {
-        const officeLocation = user.officeGeoLocation || user.geoLocation || 'altF Coworking Space, Sector 142, Noida';
+        const officeLocation = user.officeGeoLocation || user.geoLocation || DEFAULT_OFFICE_LOCATION.geoLocation;
         const text =
             `🏢 <b>Work Mode Switched to Office</b>\n\n` +
             `<b>Active Office Address:</b> ${officeLocation}\n\n` +
@@ -883,7 +914,7 @@ async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' 
     const isWfh = mode === 'WFH';
     const loc = isWfh
         ? (user.wfhGeoLocation || 'Home / WFH')
-        : (user.officeGeoLocation || user.geoLocation || 'altF Coworking Space, Sector 142, Noida');
+        : (user.officeGeoLocation || user.geoLocation || DEFAULT_OFFICE_LOCATION.geoLocation);
 
     const text =
         `${isWfh ? '🏠' : '🏢'} <b>Work Mode Set to ${mode}</b>\n\n` +
@@ -926,21 +957,63 @@ async function handleSetWfhCommand(chatId: string, user: IUser | null, customAdd
     );
 }
 
+async function handleResetOfficeCommand(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    user.workMode = 'OFFICE';
+    user.officeLatitude = DEFAULT_OFFICE_LOCATION.latitude;
+    user.officeLongitude = DEFAULT_OFFICE_LOCATION.longitude;
+    user.officeGeoLocation = DEFAULT_OFFICE_LOCATION.geoLocation;
+    user.latitude = DEFAULT_OFFICE_LOCATION.latitude;
+    user.longitude = DEFAULT_OFFICE_LOCATION.longitude;
+    user.geoLocation = DEFAULT_OFFICE_LOCATION.geoLocation;
+    user.geoAccuracy = DEFAULT_OFFICE_LOCATION.geoAccuracy;
+    await user.save();
+
+    const resetMsg =
+        `🏢 <b>Office Address Reset to Default (altF Coworking)</b>\n\n` +
+        `<b>Active Office:</b> ${DEFAULT_OFFICE_LOCATION.geoLocation}\n` +
+        `<b>Coordinates:</b> <code>${DEFAULT_OFFICE_LOCATION.latitude}, ${DEFAULT_OFFICE_LOCATION.longitude}</code>\n` +
+        `<b>Work Mode:</b> 🏢 Office Mode Active\n\n` +
+        `All office check-ins and check-outs will now use altF Coworking Space.`;
+
+    await sendTelegramMessage(resetMsg, chatId, getInteractiveKeyboard(user));
+}
+
 async function handleSetOfficeCommand(chatId: string, user: IUser | null, customAddr?: string) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
     }
 
+    if (customAddr && ['default', 'altf', 'reset'].includes(customAddr.trim().toLowerCase())) {
+        await handleResetOfficeCommand(chatId, user);
+        return;
+    }
+
     if (!customAddr) {
         user.workMode = 'OFFICE';
         await user.save();
+
+        const currentOffice = user.officeGeoLocation || DEFAULT_OFFICE_LOCATION.geoLocation;
         await sendTelegramMessage(
-            `🏢 <b>Set Office Location</b>\n\n` +
-            `Please share your office GPS location pin 📍 or reply with your office address:\n` +
-            `Example: <code>/setoffice 210-211 altF Coworking, Sector 142, Noida</code>`,
+            `🏢 <b>Office Location Configuration</b>\n\n` +
+            `<b>Current Office:</b> ${currentOffice}\n` +
+            `<b>Default Office:</b> ${DEFAULT_OFFICE_LOCATION.geoLocation}\n\n` +
+            `• Tap <b>"🏢 Reset to Default (altF)"</b> to restore altF Sector 142.\n` +
+            `• Or reply with an address: <code>/setoffice &lt;address&gt;</code>\n` +
+            `• Or share your live GPS pin 📍 to save custom office coordinates.`,
             chatId,
-            getLocationKeyboard()
+            {
+                inline_keyboard: [
+                    [{ text: '🏢 Reset to Default (altF Coworking)', callback_data: 'action_reset_office_default' }],
+                    [{ text: '📍 Share Live Office GPS Pin', callback_data: 'action_share_gps_office' }],
+                    [{ text: '⚙️ Account Settings', callback_data: 'action_settings' }]
+                ]
+            }
         );
         return;
     }
@@ -954,7 +1027,8 @@ async function handleSetOfficeCommand(chatId: string, user: IUser | null, custom
         `🏢 <b>Office Location Updated Successfully!</b>\n\n` +
         `<b>Address:</b> ${customAddr}\n` +
         `<b>Work Mode:</b> 🏢 Office Active\n\n` +
-        `Future punches will now use this Office address.`,
+        `Future office punches will now use this address.\n` +
+        `<i>(To reset to altF anytime, type <code>/setoffice default</code> or /resetoffice)</i>`,
         chatId,
         getInteractiveKeyboard(user)
     );

@@ -3,7 +3,7 @@ import { connectToDatabase } from '@/lib/db';
 import User from '@/models/User';
 import AttendanceLog from '@/models/AttendanceLog';
 import { sendTelegramMessage } from '@/lib/telegram';
-import { getISTParts, getEffectiveUserLocation } from '@/lib/markAttendance';
+import { getISTParts, getEffectiveUserLocation, DEFAULT_OFFICE_LOCATION } from '@/lib/markAttendance';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -22,7 +22,8 @@ export async function GET(request: Request) {
                 chatId: process.env.TELEGRAM_CHAT_ID,
                 hrUsername: process.env.HR_USERNAME || 'Default User',
                 workMode: 'OFFICE',
-                geoLocation: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India',
+                officeGeoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
+                geoLocation: DEFAULT_OFFICE_LOCATION.geoLocation,
             } as any];
         }
 
