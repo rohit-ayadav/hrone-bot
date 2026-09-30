@@ -10,7 +10,16 @@ import {
     getEffectiveUserLocation,
     DEFAULT_OFFICE_LOCATION
 } from '@/lib/markAttendance';
-import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
+import {
+    sendTelegramMessage,
+    editTelegramMessage,
+    deleteTelegramMessage,
+    answerCallbackQuery,
+    reverseGeocode,
+    renderProgressBar,
+    getPersistentReplyKeyboard,
+    setupBotCommands
+} from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
 import {
     findExistingHROneUser,
@@ -29,9 +38,10 @@ export async function POST(request: Request) {
         if (body.callback_query) {
             const callbackQuery = body.callback_query;
             const chatId = String(callbackQuery.message.chat.id);
+            const messageId = callbackQuery.message?.message_id;
             const data = callbackQuery.data;
 
-            await answerCallbackQuery(callbackQuery.id, 'Processing request...');
+            await answerCallbackQuery(callbackQuery.id);
 
             let user = await User.findOne({ chatId });
 
@@ -40,19 +50,19 @@ export async function POST(request: Request) {
             } else if (data === 'action_mark') {
                 await handleMarkAttendance(chatId, user);
             } else if (data === 'action_toggle_workmode') {
-                await handleToggleWorkMode(chatId, user);
+                await handleToggleWorkMode(chatId, user, messageId);
             } else if (data === 'action_set_mode_office') {
                 await handleSetMode(chatId, user, 'OFFICE');
             } else if (data === 'action_set_mode_wfh') {
                 await handleSetMode(chatId, user, 'WFH');
             } else if (data === 'action_extend_30') {
-                await handleExtendPunchOut(chatId, user, 30);
+                await handleExtendPunchOut(chatId, user, 30, messageId);
             } else if (data === 'action_extend_60') {
-                await handleExtendPunchOut(chatId, user, 60);
+                await handleExtendPunchOut(chatId, user, 60, messageId);
             } else if (data === 'action_skip_out_today') {
-                await handleSkipOutToday(chatId, user);
+                await handleSkipOutToday(chatId, user, messageId);
             } else if (data === 'action_prompt_early_out') {
-                await handlePromptEarlyOut(chatId, user);
+                await handlePromptEarlyOut(chatId, user, messageId);
             } else if (data === 'action_confirm_early_out') {
                 await handleConfirmEarlyOut(chatId, user);
             } else if (data === 'action_set_wfh_loc') {
@@ -60,30 +70,38 @@ export async function POST(request: Request) {
             } else if (data === 'action_set_office_loc') {
                 await handleSetOfficeCommand(chatId, user);
             } else if (data === 'action_reset_office_default') {
-                await handleResetOfficeCommand(chatId, user);
+                await handleResetOfficeCommand(chatId, user, messageId);
             } else if (data === 'action_share_gps_office') {
                 await handleLocationUpdateRequest(chatId, user, 'OFFICE');
             } else if (data === 'action_status') {
-                await handleStatusRequest(chatId, user);
+                await handleStatusRequest(chatId, user, messageId);
             } else if (data === 'action_history') {
-                await handleHistoryRequest(chatId, undefined, user);
+                await handleHistoryRequest(chatId, undefined, user, messageId);
             } else if (data === 'action_pick_date') {
-                await handleDatePickerRequest(chatId);
+                await handleDatePickerRequest(chatId, messageId);
             } else if (data.startsWith('action_hist_day_')) {
                 const dayNum = data.replace('action_hist_day_', '');
-                await handleHistoryRequest(chatId, dayNum, user);
+                await handleHistoryRequest(chatId, dayNum, user, messageId);
             } else if (data === 'action_skip') {
                 await handleSkipRequest(chatId);
             } else if (data === 'action_toggle_auto') {
-                await handleToggleAuto(chatId, user);
+                await handleToggleAuto(chatId, user, messageId);
             } else if (data === 'action_settings') {
-                await handleSettingsRequest(chatId, user);
+                await handleSettingsRequest(chatId, user, messageId);
+            } else if (data === 'action_menu_back') {
+                await handleStatusRequest(chatId, user, messageId);
+            } else if (data.startsWith('action_payload_')) {
+                const logId = data.replace('action_payload_', '');
+                await handlePayloadView(chatId, messageId, logId, user);
+            } else if (data.startsWith('action_hide_payload_')) {
+                const logId = data.replace('action_hide_payload_', '');
+                await handleHidePayload(chatId, messageId, logId, user);
             } else if (data === 'action_myhistory') {
-                await handleMyHistory(chatId, user);
+                await handleMyHistory(chatId, user, messageId);
             } else if (data === 'action_help') {
-                await handleHelpRequest(chatId, user);
+                await handleHelpRequest(chatId, user, messageId);
             } else if (data === 'action_monthly_stats') {
-                await handleStatsRequest(chatId, user);
+                await handleStatsRequest(chatId, user, messageId);
             } else if (data === 'action_change_username') {
                 await handleChangeUsernameRequest(chatId, user);
             } else if (data === 'action_cancel') {
@@ -94,7 +112,11 @@ export async function POST(request: Request) {
                     user.transferOtpExpiresAt = undefined;
                     await user.save();
                 }
-                await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
+                if (messageId) {
+                    await handleStatusRequest(chatId, user, messageId);
+                } else {
+                    await sendTelegramMessage('❌ <b>Operation Cancelled</b>', chatId);
+                }
             } else if (data === 'action_transfer_otp') {
                 if (user && user.pendingTransferTargetChatId) {
                     const targetUser = await User.findOne({ chatId: user.pendingTransferTargetChatId });
@@ -340,23 +362,35 @@ export async function POST(request: Request) {
             }
         }
 
-        // Standard Text Commands
+        // Standard Text Commands & Bottom Persistent Button Handlers
         if (text.startsWith('/start') || text.startsWith('/register')) {
+            setupBotCommands().catch(() => {});
             if (!user || user.registrationState !== 'IDLE') {
                 await startRegistrationWizard(chatId, telegramUsername);
             } else {
                 await sendTelegramMessage(
-                    `👋 <b>Welcome back to HROne Bot!</b>\n\n` +
-                    `<b>Registered User:</b> <code>${user.hrUsername}</code>\n` +
-                    `<b>Auto-Punch:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}`,
+                    `👋 <b>Welcome back to HROne Attendance Assistant!</b>\n\n` +
+                    `<b>Account:</b> ${user.employeeName || user.hrUsername}\n` +
+                    `<b>Work Mode:</b> ${user.workMode === 'WFH' ? '🏠 WFH' : '🏢 Office'}\n\n` +
+                    `Use the persistent bottom buttons or the interactive dashboard below:`,
                     chatId,
-                    getInteractiveKeyboard(user)
+                    getPersistentReplyKeyboard()
                 );
+                await handleStatusRequest(chatId, user);
             }
+        } else if (text === '⚡ Quick Punch' || text.startsWith('/mark')) {
+            await handleMarkAttendance(chatId, user);
+        } else if (text === '📊 Shift Status' || text.startsWith('/status')) {
+            await handleStatusRequest(chatId, user);
+        } else if (text === '🏢 Mode: Office / WFH' || text === '🏢 Toggle Work Mode' || text.startsWith('/workmode') || text.startsWith('/toggleworkmode')) {
+            await handleToggleWorkMode(chatId, user);
+        } else if (text === '⚙️ Menu & Settings' || text.startsWith('/settings')) {
+            await handleSettingsRequest(chatId, user);
+        } else if (text === '❓ Help & Guide' || text.startsWith('/help')) {
+            setupBotCommands().catch(() => {});
+            await handleHelpRequest(chatId, user);
         } else if (text.startsWith('/changeusername')) {
             await handleChangeUsernameRequest(chatId, user);
-        } else if (text.startsWith('/workmode') || text.startsWith('/toggleworkmode')) {
-            await handleToggleWorkMode(chatId, user);
         } else if (text.startsWith('/wfh')) {
             await handleSetMode(chatId, user, 'WFH');
         } else if (text.startsWith('/office')) {
@@ -375,10 +409,6 @@ export async function POST(request: Request) {
             const parts = text.split(' ');
             const mins = parseInt(parts[1] || '30', 10) || 30;
             await handleExtendPunchOut(chatId, user, mins);
-        } else if (text.startsWith('/mark')) {
-            await handleMarkAttendance(chatId, user);
-        } else if (text.startsWith('/status')) {
-            await handleStatusRequest(chatId, user);
         } else if (text.startsWith('/history')) {
             const parts = text.split(' ');
             const dateParam = parts.slice(1).join(' ').trim();
@@ -391,8 +421,6 @@ export async function POST(request: Request) {
             await handleMyHistory(chatId, user);
         } else if (text.startsWith('/stats') || text.startsWith('/analytics')) {
             await handleStatsRequest(chatId, user);
-        } else if (text.startsWith('/settings')) {
-            await handleSettingsRequest(chatId, user);
         } else if (text.startsWith('/toggleauto')) {
             await handleToggleAuto(chatId, user);
         } else if (text.startsWith('/updatecreds')) {
@@ -406,14 +434,13 @@ export async function POST(request: Request) {
             } else {
                 await sendTelegramMessage('You are not currently registered.', chatId);
             }
-        } else if (text.startsWith('/help')) {
-            await handleHelpRequest(chatId, user);
         } else {
+            const shiftContext = await getTodayShiftContext(user, chatId);
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance, /workmode to toggle Office/WFH, /history for history, or /settings for account info.`,
+                `Tap <b>⚡ Quick Punch</b> or <b>📊 Shift Status</b> below, or type /help for commands.`,
                 chatId,
-                getInteractiveKeyboard(user)
+                getInteractiveKeyboard(user, shiftContext)
             );
         }
 
@@ -512,13 +539,137 @@ function normalizeDateInput(input?: string): string | undefined {
     return undefined;
 }
 
+export interface ShiftContext {
+    inLog?: any;
+    outLog?: any;
+    state: 'NOT_CHECKED_IN' | 'WORKING' | 'READY_TO_OUT' | 'COMPLETED';
+    inTimeStr?: string;
+    outTimeStr?: string;
+    elapsedHours: number;
+    remainingHours: number;
+    elapsedFormatted: string;
+    remainingFormatted: string;
+    targetOutTimeStr?: string;
+    percent: number;
+    progressBar: string;
+    totalTargetHours: number;
+}
+
+export async function getTodayShiftContext(user: IUser | null, chatId: string): Promise<ShiftContext> {
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    const defaultRes: ShiftContext = {
+        state: 'NOT_CHECKED_IN',
+        elapsedHours: 0,
+        remainingHours: 9,
+        elapsedFormatted: '0h 00m',
+        remainingFormatted: '9h 00m',
+        percent: 0,
+        progressBar: renderProgressBar(0),
+        totalTargetHours: 9,
+    };
+
+    if (!user || user.registrationState !== 'IDLE') {
+        return defaultRes;
+    }
+
+    const todayLogs = await AttendanceLog.find({
+        $or: [{ chatId }, { hrUsername: user.hrUsername }],
+        status: 'SUCCESS',
+        punchTime: { $regex: todayStr }
+    }).sort({ createdAt: 1 });
+
+    const inLog = todayLogs.find((l) => l.action === 'In');
+    const outLog = todayLogs.find((l) => l.action === 'Out');
+
+    let extensionMinutes = 0;
+    if (user.outPunchExtensionDate === todayStr && user.outPunchExtensionMinutes) {
+        extensionMinutes = user.outPunchExtensionMinutes;
+    }
+    const totalTargetHours = 9 + (extensionMinutes / 60);
+
+    const formatTime = (d: Date) => {
+        const parts = getISTParts(d);
+        const h12 = parts.hour % 12 || 12;
+        const ampm = parts.hour >= 12 ? 'PM' : 'AM';
+        return `${pad(h12)}:${pad(parts.minute)} ${ampm}`;
+    };
+
+    if (!inLog) {
+        return {
+            ...defaultRes,
+            totalTargetHours,
+        };
+    }
+
+    const inTime = new Date(inLog.punchTime);
+    const inTimeStr = formatTime(inTime);
+
+    if (outLog) {
+        const outTime = new Date(outLog.punchTime);
+        const outTimeStr = formatTime(outTime);
+        const workedMs = Math.max(0, outTime.getTime() - inTime.getTime());
+        const workedH = Math.floor(workedMs / 3600000);
+        const workedM = Math.floor((workedMs % 3600000) / 60000);
+
+        return {
+            inLog,
+            outLog,
+            state: 'COMPLETED',
+            inTimeStr,
+            outTimeStr,
+            elapsedHours: workedMs / 3600000,
+            remainingHours: 0,
+            elapsedFormatted: `${workedH}h ${pad(workedM)}m`,
+            remainingFormatted: '0h 00m',
+            targetOutTimeStr: outTimeStr,
+            percent: 100,
+            progressBar: renderProgressBar(100),
+            totalTargetHours,
+        };
+    }
+
+    const elapsedMs = Math.max(0, now.getTime() - inTime.getTime());
+    const elapsedHours = elapsedMs / 3600000;
+    const elapsedH = Math.floor(elapsedHours);
+    const elapsedM = Math.floor((elapsedHours % 1) * 60);
+
+    const targetOutDate = new Date(inTime.getTime() + totalTargetHours * 3600000);
+    const targetOutTimeStr = formatTime(targetOutDate);
+
+    const remainingMs = Math.max(0, targetOutDate.getTime() - now.getTime());
+    const remainingHours = remainingMs / 3600000;
+    const remH = Math.floor(remainingHours);
+    const remM = Math.floor((remainingHours % 1) * 60);
+
+    const percent = Math.min(100, Math.round((elapsedHours / totalTargetHours) * 100));
+    const isReady = elapsedHours >= totalTargetHours;
+
+    return {
+        inLog,
+        state: isReady ? 'READY_TO_OUT' : 'WORKING',
+        inTimeStr,
+        elapsedHours,
+        remainingHours,
+        elapsedFormatted: `${elapsedH}h ${pad(elapsedM)}m`,
+        remainingFormatted: isReady ? '0h 00m' : `${remH}h ${pad(remM)}m`,
+        targetOutTimeStr,
+        percent,
+        progressBar: renderProgressBar(percent),
+        totalTargetHours,
+    };
+}
+
 async function handleMarkAttendance(chatId: string, user: IUser | null) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your HRone account.', chatId);
         return;
     }
 
-    await sendTelegramMessage('⏳ <b>Processing attendance punch...</b>', chatId);
+    const waitMsg = await sendTelegramMessage('⏳ <b>Connecting to HRone Gateway & punching attendance...</b>', chatId);
 
     try {
         const result = await markAttendance(undefined, {
@@ -542,7 +693,7 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
             skipPunchOutDate: user.skipPunchOutDate,
         });
 
-        await AttendanceLog.create({
+        const log = await AttendanceLog.create({
             chatId,
             hrUsername: user.hrUsername,
             action: result.action,
@@ -553,27 +704,41 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
             responsePayload: result.response,
         });
 
-        const reqJson = JSON.stringify(result.requestPayload, null, 2);
-        const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
-
-        const resJson = JSON.stringify(result.response, null, 2);
-        const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
-
         const modeBadge = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
-        const successText =
-            `✅ <b>Attendance Punched Successfully!</b>\n\n` +
-            `<b>Account:</b> ${user.hrUsername}\n` +
-            `<b>Action:</b> Punch ${result.action}\n` +
-            `<b>Time:</b> ${result.punchTime} (IST)\n` +
-            `<b>Work Mode:</b> ${modeBadge}\n` +
-            `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n\n` +
-            `<b>📤 Sent Request Payload:</b>\n` +
-            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
-            `<b>📥 Received API Response:</b>\n` +
-            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
+        const actionBadge = result.action === 'In' ? '🟢 Checked In' : '🔴 Checked Out';
+        const earlyNote = result.isEarlyOut ? ' ⚠️ <i>(Early Sign-Off)</i>' : '';
+        const empDisplay = user.employeeName ? `${user.employeeName} (<code>${user.hrUsername}</code>)` : `<code>${user.hrUsername}</code>`;
 
-        await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
+        const shiftContext = await getTodayShiftContext(user, chatId);
+        const shiftNote = result.action === 'In'
+            ? `📊 <b>Shift Target:</b> 9h 00m (Target Out: <b>${shiftContext.targetOutTimeStr || '06:30 PM'}</b>)`
+            : `🎉 <b>Shift Summary:</b> Total Worked: <b>${shiftContext.elapsedFormatted}</b>`;
+
+        const successText =
+            `✅ <b>${actionBadge} Successfully!</b>${earlyNote}\n\n` +
+            `👤 <b>Employee:</b> ${empDisplay}\n` +
+            `⏰ <b>Punch Time:</b> ${result.punchTime} (IST)\n` +
+            `🏢 <b>Work Mode:</b> ${modeBadge}\n` +
+            `📍 <b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n` +
+            `🛡️ <b>Geofence:</b> Verified (Safe Micro-Jitter applied ✅)\n\n` +
+            `${shiftNote}`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '🔍 View Raw API Payload', callback_data: `action_payload_${log._id}` }],
+                ...getInteractiveKeyboard(user, shiftContext).inline_keyboard
+            ]
+        };
+
+        if (waitMsg && waitMsg.result?.message_id) {
+            await editTelegramMessage(successText, chatId, waitMsg.result.message_id, keyboard);
+        } else {
+            await sendTelegramMessage(successText, chatId, keyboard);
+        }
     } catch (error: any) {
+        if (waitMsg && waitMsg.result?.message_id) {
+            await deleteTelegramMessage(chatId, waitMsg.result.message_id);
+        }
         await AttendanceLog.create({
             chatId,
             hrUsername: user.hrUsername,
@@ -614,7 +779,7 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
                         { text: '⏳ Extend +30m', callback_data: 'action_extend_30' }
                     ],
                     [
-                        { text: 'ℹ️ Check Today Logs', callback_data: 'action_history' },
+                        { text: '📊 Today Logs', callback_data: 'action_history' },
                         { text: '⚙️ Settings', callback_data: 'action_settings' }
                     ]
                 ]
@@ -625,7 +790,80 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
     }
 }
 
-async function handleDatePickerRequest(chatId: string) {
+async function handlePayloadView(chatId: string, messageId: number | undefined, logId: string, user: IUser | null) {
+    if (!messageId) return;
+    try {
+        const log = await AttendanceLog.findById(logId);
+        if (!log) return;
+
+        const reqJson = JSON.stringify(log.requestPayload || {}, null, 2);
+        const truncatedReq = reqJson.length > 1200 ? reqJson.substring(0, 1200) + '\n... (truncated)' : reqJson;
+
+        const resJson = JSON.stringify(log.responsePayload || {}, null, 2);
+        const truncatedRes = resJson.length > 1200 ? resJson.substring(0, 1200) + '\n... (truncated)' : resJson;
+
+        const shiftContext = await getTodayShiftContext(user, chatId);
+        const text =
+            `🔍 <b>Technical API Payload & Response</b>\n\n` +
+            `<b>Account:</b> ${log.hrUsername}\n` +
+            `<b>Punch Action:</b> ${log.action}\n` +
+            `<b>Recorded Time:</b> ${log.punchTime}\n\n` +
+            `<b>📤 Request Payload:</b>\n` +
+            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
+            `<b>📥 Gateway Response:</b>\n` +
+            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '🔙 Hide Raw API Details', callback_data: `action_hide_payload_${log._id}` }],
+                ...getInteractiveKeyboard(user, shiftContext).inline_keyboard
+            ]
+        };
+
+        await editTelegramMessage(text, chatId, messageId, keyboard);
+    } catch (e: any) {
+        console.error('Failed to view payload:', e);
+    }
+}
+
+async function handleHidePayload(chatId: string, messageId: number | undefined, logId: string, user: IUser | null) {
+    if (!messageId) return;
+    try {
+        const log = await AttendanceLog.findById(logId);
+        if (!log || !user) return;
+
+        const shiftContext = await getTodayShiftContext(user, chatId);
+        const modeBadge = user.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+        const actionBadge = log.action === 'In' ? '🟢 Checked In' : '🔴 Checked Out';
+        const empDisplay = user.employeeName ? `${user.employeeName} (<code>${user.hrUsername}</code>)` : `<code>${user.hrUsername}</code>`;
+
+        const shiftNote = log.action === 'In'
+            ? `📊 <b>Shift Target:</b> 9h 00m (Target Out: <b>${shiftContext.targetOutTimeStr || '06:30 PM'}</b>)`
+            : `🎉 <b>Shift Summary:</b> Total Worked: <b>${shiftContext.elapsedFormatted}</b>`;
+
+        const text =
+            `✅ <b>${actionBadge} Record</b>\n\n` +
+            `👤 <b>Employee:</b> ${empDisplay}\n` +
+            `⏰ <b>Punch Time:</b> ${log.punchTime} (IST)\n` +
+            `🏢 <b>Work Mode:</b> ${modeBadge}\n` +
+            `📍 <b>Location:</b> ${log.requestPayload?.geoLocation || user.geoLocation}\n` +
+            `🛡️ <b>Geofence:</b> Verified (Safe Micro-Jitter applied ✅)\n\n` +
+            `${shiftNote}`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '🔍 View Raw API Payload', callback_data: `action_payload_${log._id}` }],
+                ...getInteractiveKeyboard(user, shiftContext).inline_keyboard
+            ]
+        };
+
+        await editTelegramMessage(text, chatId, messageId, keyboard);
+    } catch (e: any) {
+        console.error('Failed to hide payload:', e);
+    }
+}
+
+async function handleDatePickerRequest(chatId: string, messageId?: number) {
     const now = new Date();
     const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -635,10 +873,15 @@ async function handleDatePickerRequest(chatId: string) {
         `📅 <b>Select Day for History (${monthLabel})</b>\n\n` +
         `Tap any day number (1 – 31) below to view its full attendance history & raw punch logs:`;
 
-    await sendTelegramMessage(pickerText, chatId, getDatePickerKeyboard());
+    const keyboard = getDatePickerKeyboard();
+    if (messageId) {
+        await editTelegramMessage(pickerText, chatId, messageId, keyboard);
+    } else {
+        await sendTelegramMessage(pickerText, chatId, keyboard);
+    }
 }
 
-async function handleHistoryRequest(chatId: string, dateInput?: string, user?: IUser | null) {
+async function handleHistoryRequest(chatId: string, dateInput?: string, user?: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your HRone account.', chatId);
         return;
@@ -646,7 +889,14 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
 
     const targetDate = normalizeDateInput(dateInput);
     const dateLabel = targetDate || 'today';
-    await sendTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel}...</b>`, chatId);
+
+    let waitMessageId = messageId;
+    if (messageId) {
+        await editTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel}...</b>`, chatId, messageId);
+    } else {
+        const m = await sendTelegramMessage(`⏳ <b>Fetching attendance logs for ${dateLabel}...</b>`, chatId);
+        if (m && m.result?.message_id) waitMessageId = m.result.message_id;
+    }
 
     try {
         const history = await getAttendanceHistory(targetDate, {
@@ -682,7 +932,7 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
         if (Array.isArray(history.rawPunches) && history.rawPunches.length > 0) {
             punchListText = history.rawPunches.map((p: any) => {
                 const time = p.punchDateTime ? p.punchDateTime.substring(11, 16) : 'N/A';
-                const loc = p.punchLocation ? (p.punchLocation.length > 40 ? p.punchLocation.substring(0, 40) + '...' : p.punchLocation) : 'Online Check-in';
+                const loc = p.punchLocation ? (p.punchLocation.length > 35 ? p.punchLocation.substring(0, 35) + '...' : p.punchLocation) : 'Online Check-in';
                 return `• <b>${time}</b> (${p.punchSource || 'Check-in'} - <i>${loc}</i>)`;
             }).join('\n');
         } else {
@@ -692,7 +942,7 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
         const summary = history.summary;
         const historyText =
             `📊 <b>HRone Attendance Logs (${history.date})</b>\n` +
-            `<b>Account:</b> ${user.hrUsername}\n\n` +
+            `<b>Account:</b> ${user.employeeName || user.hrUsername}\n\n` +
             `<b>Status:</b> ${summary?.status || 'N/A'}\n` +
             `<b>Check In:</b> ${summary?.timeIn || 'Not Punched'}\n` +
             `<b>Check Out:</b> ${summary?.timeOut || 'Not Punched'}\n` +
@@ -703,17 +953,31 @@ async function handleHistoryRequest(chatId: string, dateInput?: string, user?: I
             `🌐 <b>HRone Raw Punch Logs (${history.rawPunches?.length || 0}):</b>\n` +
             punchListText;
 
-        await sendTelegramMessage(historyText, chatId, getInteractiveKeyboard(user));
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '📅 Pick Another Day', callback_data: 'action_pick_date' },
+                    { text: '🔙 Dashboard', callback_data: 'action_menu_back' }
+                ]
+            ]
+        };
+
+        if (waitMessageId) {
+            await editTelegramMessage(historyText, chatId, waitMessageId, keyboard);
+        } else {
+            await sendTelegramMessage(historyText, chatId, keyboard);
+        }
     } catch (error: any) {
-        await sendTelegramMessage(
-            `❌ <b>Failed to fetch attendance history</b>\n\n<b>Error:</b> ${error.message}`,
-            chatId,
-            getInteractiveKeyboard(user)
-        );
+        const errorText = `❌ <b>Failed to fetch attendance history</b>\n\n<b>Error:</b> ${error.message}`;
+        if (waitMessageId) {
+            await editTelegramMessage(errorText, chatId, waitMessageId);
+        } else {
+            await sendTelegramMessage(errorText, chatId);
+        }
     }
 }
 
-async function handleMyHistory(chatId: string, user: IUser | null) {
+async function handleMyHistory(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Please send /register to link your account.', chatId);
         return;
@@ -722,7 +986,15 @@ async function handleMyHistory(chatId: string, user: IUser | null) {
     try {
         const logs = await AttendanceLog.find({ chatId }).sort({ createdAt: -1 }).limit(15);
         if (!logs || logs.length === 0) {
-            await sendTelegramMessage('💾 <b>Database Audit History</b>\n\n<i>No attendance punch records found in DB yet.</i>', chatId, getInteractiveKeyboard(user));
+            const noLogsText = '💾 <b>Database Audit History</b>\n\n<i>No attendance punch records found in DB yet.</i>';
+            const keyboard = {
+                inline_keyboard: [[{ text: '🔙 Back to Settings', callback_data: 'action_settings' }]]
+            };
+            if (messageId) {
+                await editTelegramMessage(noLogsText, chatId, messageId, keyboard);
+            } else {
+                await sendTelegramMessage(noLogsText, chatId, keyboard);
+            }
             return;
         }
 
@@ -735,16 +1007,29 @@ async function handleMyHistory(chatId: string, user: IUser | null) {
 
         const text =
             `💾 <b>Saved DB Attendance History (Last ${logs.length}):</b>\n` +
-            `<b>Account:</b> ${user.hrUsername}\n\n` +
+            `<b>Account:</b> ${user.employeeName || user.hrUsername}\n\n` +
             logLines;
 
-        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '📅 Pick A Day', callback_data: 'action_pick_date' },
+                    { text: '🔙 Back to Settings', callback_data: 'action_settings' }
+                ]
+            ]
+        };
+
+        if (messageId) {
+            await editTelegramMessage(text, chatId, messageId, keyboard);
+        } else {
+            await sendTelegramMessage(text, chatId, keyboard);
+        }
     } catch (err: any) {
-        await sendTelegramMessage(`❌ Error fetching DB logs: ${err.message}`, chatId, getInteractiveKeyboard(user));
+        await sendTelegramMessage(`❌ Error fetching DB logs: ${err.message}`, chatId);
     }
 }
 
-async function handleToggleAuto(chatId: string, user: IUser | null) {
+async function handleToggleAuto(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -753,14 +1038,20 @@ async function handleToggleAuto(chatId: string, user: IUser | null) {
     user.autoMarkEnabled = !user.autoMarkEnabled;
     await user.save();
 
+    if (messageId) {
+        await handleSettingsRequest(chatId, user, messageId);
+        return;
+    }
+
+    const shiftContext = await getTodayShiftContext(user, chatId);
     const statusText =
         `⚙️ <b>Auto-Punch Status Updated</b>\n\n` +
         `Automated Cron Punch is now <b>${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}</b> for user <code>${user.hrUsername}</code>.`;
 
-    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user));
+    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user, shiftContext));
 }
 
-async function handleSettingsRequest(chatId: string, user: IUser | null) {
+async function handleSettingsRequest(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -787,7 +1078,7 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
     const skipDisplay = user.skipPunchOutDate === todayStr ? 'Yes (Skipped for today)' : 'No';
 
     const settingsText =
-        `⚙️ <b>Account Profile & Settings</b>\n\n` +
+        `⚙️ <b>Account Profile & Configuration</b>\n\n` +
         `<b>HRone Username:</b> <code>${user.hrUsername}</code>\n` +
         `<b>Employee Code:</b> ${empCodeDisplay}` +
         `${nameDisplay}` +
@@ -800,37 +1091,15 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
         `<b>Auto-Punch Status:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
         `<b>Today Shift Extension:</b> ${extDisplay}\n` +
         `<b>Skip Auto-Out Today:</b> ${skipDisplay}\n\n` +
-        `<b>Available Management Commands:</b>\n` +
-        `• /workmode - Toggle between Office and WFH mode\n` +
-        `• /wfh or /office - Directly switch work mode\n` +
-        `• /setwfh &lt;address&gt; - Set your Home/WFH location\n` +
-        `• /setoffice &lt;address&gt; - Set your Office location\n` +
-        `• /resetoffice - Reset office to default (altF Coworking)\n` +
-        `• /extend &lt;mins&gt; - Extend today's shift (e.g. /extend 30)\n` +
-        `• /toggleauto - Enable or disable automated cron punch\n` +
-        `• /updatecreds - Update HRone username/password\n` +
-        `• /unregister - Delete account profile from bot`;
+        `<i>Tap any option below to configure or return to the main dashboard.</i>`;
 
-    const toggleModeText = user.workMode === 'WFH' ? '🏢 Switch to Office Mode' : '🏠 Switch to WFH Mode';
+    const keyboard = getSettingsSubmenuKeyboard(user);
 
-    await sendTelegramMessage(settingsText, chatId, {
-        inline_keyboard: [
-            [
-                { text: toggleModeText, callback_data: 'action_toggle_workmode' }
-            ],
-            [
-                { text: '🏠 Set WFH Location', callback_data: 'action_set_wfh_loc' },
-                { text: '🏢 Set Office Location', callback_data: 'action_set_office_loc' }
-            ],
-            [
-                { text: '🏢 Reset Office to altF', callback_data: 'action_reset_office_default' },
-                { text: user.autoMarkEnabled ? '⏸️ Disable Auto' : '▶️ Enable Auto', callback_data: 'action_toggle_auto' }
-            ],
-            [
-                { text: '📍 Punch Attendance Now', callback_data: 'action_mark' }
-            ]
-        ]
-    });
+    if (messageId) {
+        await editTelegramMessage(settingsText, chatId, messageId, keyboard);
+    } else {
+        await sendTelegramMessage(settingsText, chatId, keyboard);
+    }
 }
 
 function getLocationKeyboard() {
@@ -870,7 +1139,7 @@ async function handleLocationUpdateRequest(chatId: string, user: IUser | null, t
     await sendTelegramMessage(text, chatId, getLocationKeyboard());
 }
 
-async function handleToggleWorkMode(chatId: string, user: IUser | null) {
+async function handleToggleWorkMode(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -880,30 +1149,26 @@ async function handleToggleWorkMode(chatId: string, user: IUser | null) {
     user.workMode = newMode;
     await user.save();
 
-    if (newMode === 'WFH') {
-        const wfhLocation = user.wfhGeoLocation;
-        const locMsg = wfhLocation
-            ? `<b>Active WFH Address:</b> ${wfhLocation}`
-            : `⚠️ <i>No dedicated WFH location set yet!</i>\nShare your live GPS location pin 📍 or type <code>/setwfh &lt;address&gt;</code> to save your home coordinates.`;
-
-        const text =
-            `🏠 <b>Work Mode Switched to WFH (Work From Home)</b>\n\n` +
-            `${locMsg}\n\n` +
-            `Scheduled automated and manual attendance punches will now record under <b>WFH mode</b>.`;
-
-        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
-    } else {
-        const officeLocation = user.officeGeoLocation || user.geoLocation || DEFAULT_OFFICE_LOCATION.geoLocation;
-        const text =
-            `🏢 <b>Work Mode Switched to Office</b>\n\n` +
-            `<b>Active Office Address:</b> ${officeLocation}\n\n` +
-            `Scheduled automated and manual attendance punches will now record under <b>Office mode</b>.`;
-
-        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+    if (messageId) {
+        await handleStatusRequest(chatId, user, messageId);
+        return;
     }
+
+    const shiftContext = await getTodayShiftContext(user, chatId);
+    const modeBadge = newMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+    const locMsg = newMode === 'WFH'
+        ? (user.wfhGeoLocation ? `<b>Active Address:</b> ${user.wfhGeoLocation}` : `⚠️ <i>No home address set yet. Use /setwfh &lt;address&gt;</i>`)
+        : `<b>Active Address:</b> ${user.officeGeoLocation || DEFAULT_OFFICE_LOCATION.geoLocation}`;
+
+    const text =
+        `🔄 <b>Work Mode Switched to ${modeBadge}</b>\n\n` +
+        `${locMsg}\n\n` +
+        `Future attendance punches will record under <b>${modeBadge}</b>.`;
+
+    await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user, shiftContext));
 }
 
-async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' | 'WFH') {
+async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' | 'WFH', messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -911,6 +1176,12 @@ async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' 
     user.workMode = mode;
     await user.save();
 
+    if (messageId) {
+        await handleStatusRequest(chatId, user, messageId);
+        return;
+    }
+
+    const shiftContext = await getTodayShiftContext(user, chatId);
     const isWfh = mode === 'WFH';
     const loc = isWfh
         ? (user.wfhGeoLocation || 'Home / WFH')
@@ -921,7 +1192,7 @@ async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' 
         `<b>Active Location:</b> ${loc}\n\n` +
         `Punches will now use this work location.`;
 
-    await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+    await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user, shiftContext));
 }
 
 async function handleSetWfhCommand(chatId: string, user: IUser | null, customAddr?: string) {
@@ -947,17 +1218,18 @@ async function handleSetWfhCommand(chatId: string, user: IUser | null, customAdd
     user.wfhGeoLocation = customAddr;
     await user.save();
 
+    const shiftContext = await getTodayShiftContext(user, chatId);
     await sendTelegramMessage(
         `🏠 <b>WFH Location Updated Successfully!</b>\n\n` +
         `<b>Address:</b> ${customAddr}\n` +
         `<b>Work Mode:</b> 🏠 WFH Active\n\n` +
         `Future punches will now use this WFH address.`,
         chatId,
-        getInteractiveKeyboard(user)
+        getInteractiveKeyboard(user, shiftContext)
     );
 }
 
-async function handleResetOfficeCommand(chatId: string, user: IUser | null) {
+async function handleResetOfficeCommand(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -980,7 +1252,12 @@ async function handleResetOfficeCommand(chatId: string, user: IUser | null) {
         `<b>Work Mode:</b> 🏢 Office Mode Active\n\n` +
         `All office check-ins and check-outs will now use altF Coworking Space.`;
 
-    await sendTelegramMessage(resetMsg, chatId, getInteractiveKeyboard(user));
+    const shiftContext = await getTodayShiftContext(user, chatId);
+    if (messageId) {
+        await editTelegramMessage(resetMsg, chatId, messageId, getInteractiveKeyboard(user, shiftContext));
+    } else {
+        await sendTelegramMessage(resetMsg, chatId, getInteractiveKeyboard(user, shiftContext));
+    }
 }
 
 async function handleSetOfficeCommand(chatId: string, user: IUser | null, customAddr?: string) {
@@ -1023,6 +1300,7 @@ async function handleSetOfficeCommand(chatId: string, user: IUser | null, custom
     user.geoLocation = customAddr;
     await user.save();
 
+    const shiftContext = await getTodayShiftContext(user, chatId);
     await sendTelegramMessage(
         `🏢 <b>Office Location Updated Successfully!</b>\n\n` +
         `<b>Address:</b> ${customAddr}\n` +
@@ -1030,11 +1308,11 @@ async function handleSetOfficeCommand(chatId: string, user: IUser | null, custom
         `Future office punches will now use this address.\n` +
         `<i>(To reset to altF anytime, type <code>/setoffice default</code> or /resetoffice)</i>`,
         chatId,
-        getInteractiveKeyboard(user)
+        getInteractiveKeyboard(user, shiftContext)
     );
 }
 
-async function handleExtendPunchOut(chatId: string, user: IUser | null, minutes: number) {
+async function handleExtendPunchOut(chatId: string, user: IUser | null, minutes: number, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
         return;
@@ -1053,16 +1331,23 @@ async function handleExtendPunchOut(chatId: string, user: IUser | null, minutes:
     }
     await user.save();
 
+    const shiftContext = await getTodayShiftContext(user, chatId);
+
     const successMsg =
         `⏳ <b>Shift Extended (+${minutes} mins)</b>\n\n` +
         `Added <b>+${minutes} minutes</b> to today's working shift.\n` +
-        `• <b>Total Extension Today:</b> +${user.outPunchExtensionMinutes}m\n\n` +
+        `• <b>Total Extension Today:</b> +${user.outPunchExtensionMinutes}m\n` +
+        `• <b>New Minimum Out-Punch:</b> <b>${shiftContext.targetOutTimeStr || 'N/A'} IST</b>\n\n` +
         `Automated Punch-Out will wait for your extended working hours to complete.`;
 
-    await sendTelegramMessage(successMsg, chatId, getInteractiveKeyboard(user));
+    if (messageId) {
+        await editTelegramMessage(successMsg, chatId, messageId, getInteractiveKeyboard(user, shiftContext));
+    } else {
+        await sendTelegramMessage(successMsg, chatId, getInteractiveKeyboard(user, shiftContext));
+    }
 }
 
-async function handleSkipOutToday(chatId: string, user: IUser | null) {
+async function handleSkipOutToday(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
         return;
@@ -1076,12 +1361,17 @@ async function handleSkipOutToday(chatId: string, user: IUser | null) {
     user.skipPunchOutDate = todayStr;
     await user.save();
 
+    const shiftContext = await getTodayShiftContext(user, chatId);
     const msg =
         `⏸️ <b>Punch-Out Paused for Today</b>\n\n` +
         `Automated Punch-Out will be skipped for today (${todayStr}).\n` +
-        `You can still punch out manually at any time by sending /mark.`;
+        `You can still punch out manually at any time by tapping Quick Punch.`;
 
-    await sendTelegramMessage(msg, chatId, getInteractiveKeyboard(user));
+    if (messageId) {
+        await editTelegramMessage(msg, chatId, messageId, getInteractiveKeyboard(user, shiftContext));
+    } else {
+        await sendTelegramMessage(msg, chatId, getInteractiveKeyboard(user, shiftContext));
+    }
 }
 
 async function handleSkipRequest(chatId: string) {
@@ -1092,30 +1382,65 @@ async function handleSkipRequest(chatId: string) {
     await sendTelegramMessage(skipText, chatId);
 }
 
-async function handleStatusRequest(chatId: string, user?: IUser | null) {
+async function handleStatusRequest(chatId: string, user?: IUser | null, messageId?: number) {
     const now = new Date();
-    const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const hour = istDate.getHours();
-    const shiftMode = hour < 14 ? 'In' : 'Out';
-
+    const istParts = getISTParts(now);
     const pad = (n: number) => n.toString().padStart(2, '0');
-    const istString = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())} ${pad(istDate.getHours())}:${pad(istDate.getMinutes())}:${pad(istDate.getSeconds())}`;
+    const istString = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)} ${pad(istParts.hour)}:${pad(istParts.minute)}:${pad(istParts.second)}`;
 
-    const workModeBadge = user?.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+    const shiftContext = await getTodayShiftContext(user || null, chatId);
+    const workModeBadge = user?.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office (altF)';
+    const empDisplay = user?.employeeName ? `${user.employeeName} (<code>${user.hrUsername}</code>)` : (user?.hrUsername || 'Not Linked');
+
+    let shiftSection = '';
+    if (shiftContext.state === 'NOT_CHECKED_IN') {
+        shiftSection =
+            `📊 <b>Today's Shift: Not Checked In Yet</b>\n` +
+            `${shiftContext.progressBar} <b>0%</b>\n\n` +
+            `• <b>Morning Status:</b> Awaiting first punch of the day\n` +
+            `• <b>Standard Shift:</b> 9 Hours`;
+    } else if (shiftContext.state === 'WORKING') {
+        shiftSection =
+            `📊 <b>Today's Shift: In Progress</b>\n` +
+            `${shiftContext.progressBar} <b>${shiftContext.percent}% (${shiftContext.elapsedFormatted} / ${shiftContext.totalTargetHours}h)</b>\n\n` +
+            `• <b>Checked In:</b> ${shiftContext.inTimeStr} IST\n` +
+            `• <b>Time Remaining:</b> ${shiftContext.remainingFormatted}\n` +
+            `• <b>Earliest Out-Punch:</b> <b>${shiftContext.targetOutTimeStr} IST</b>`;
+    } else if (shiftContext.state === 'READY_TO_OUT') {
+        shiftSection =
+            `📊 <b>Today's Shift: 9 Hours Completed! 🎉</b>\n` +
+            `${shiftContext.progressBar} <b>100% (${shiftContext.elapsedFormatted})</b>\n\n` +
+            `• <b>Checked In:</b> ${shiftContext.inTimeStr} IST\n` +
+            `• <b>Eligible Since:</b> ${shiftContext.targetOutTimeStr} IST\n` +
+            `• <b>Status:</b> Ready for Out-Punch! Tap below to sign off.`;
+    } else if (shiftContext.state === 'COMPLETED') {
+        shiftSection =
+            `📊 <b>Today's Shift: Completed ✅</b>\n` +
+            `${shiftContext.progressBar} <b>100%</b>\n\n` +
+            `• <b>Check-In:</b> ${shiftContext.inTimeStr} IST\n` +
+            `• <b>Check-Out:</b> ${shiftContext.outTimeStr} IST\n` +
+            `• <b>Total Worked:</b> ${shiftContext.elapsedFormatted}\n` +
+            `• <b>Status:</b> Signed off for today. Rest well! 🎉`;
+    }
 
     const statusText =
-        `ℹ️ <b>HROne Bot System Status</b>\n\n` +
-        `<b>Current IST Time:</b> ${istString}\n` +
-        `<b>Active Shift Mode:</b> Punch ${shiftMode} (${hour < 14 ? 'Before 2 PM' : 'After 2 PM'})\n` +
-        `<b>Registered User:</b> ${user?.hrUsername || 'Not Linked'}\n` +
-        `<b>Work Mode:</b> ${workModeBadge}\n` +
-        `<b>Auto-Punch:</b> ${user?.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
-        `<b>Status:</b> Engine Operational 🟢`;
+        `ℹ️ <b>Live Attendance & Shift Status</b>\n\n` +
+        `👤 <b>Employee:</b> ${empDisplay}\n` +
+        `🏢 <b>Work Mode:</b> ${workModeBadge}\n` +
+        `🤖 <b>Auto-Punch:</b> ${user?.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
+        `🕒 <b>Current Time:</b> ${istString} IST\n\n` +
+        `${shiftSection}`;
 
-    await sendTelegramMessage(statusText, chatId, getInteractiveKeyboard(user));
+    const keyboard = getInteractiveKeyboard(user, shiftContext);
+
+    if (messageId) {
+        await editTelegramMessage(statusText, chatId, messageId, keyboard);
+    } else {
+        await sendTelegramMessage(statusText, chatId, keyboard);
+    }
 }
 
-async function handleStatsRequest(chatId: string, user?: IUser | null) {
+async function handleStatsRequest(chatId: string, user?: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
@@ -1181,7 +1506,7 @@ async function handleStatsRequest(chatId: string, user?: IUser | null) {
 
         const statsText =
             `📈 <b>Monthly Attendance Analytics (${monthLabel})</b>\n` +
-            `<b>Account:</b> ${user.hrUsername}\n\n` +
+            `<b>Account:</b> ${user.employeeName || user.hrUsername}\n\n` +
             `📅 <b>Total Days Worked:</b> ${daysWorkedCount} Days\n` +
             `⏱️ <b>Total Work Duration:</b> ${totalHours}h ${remMins}m\n` +
             `⚡ <b>Average Work / Day:</b> ${avgHours}h ${avgMins}m\n` +
@@ -1189,37 +1514,61 @@ async function handleStatsRequest(chatId: string, user?: IUser | null) {
             `📊 <b>Total Punches Logged:</b> ${monthLogs.length}\n\n` +
             `<i>Keep up the great work! Powered by HROne Bot.</i>`;
 
-        await sendTelegramMessage(statsText, chatId, getInteractiveKeyboard(user));
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '📅 Calendar History', callback_data: 'action_pick_date' },
+                    { text: '🔙 Dashboard', callback_data: 'action_menu_back' }
+                ]
+            ]
+        };
+
+        if (messageId) {
+            await editTelegramMessage(statsText, chatId, messageId, keyboard);
+        } else {
+            await sendTelegramMessage(statsText, chatId, keyboard);
+        }
     } catch (err: any) {
-        await sendTelegramMessage(`❌ Error generating stats: ${err.message}`, chatId, getInteractiveKeyboard(user));
+        await sendTelegramMessage(`❌ Error generating stats: ${err.message}`, chatId);
     }
 }
 
-async function handleHelpRequest(chatId: string, user?: IUser | null) {
+async function handleHelpRequest(chatId: string, user?: IUser | null, messageId?: number) {
     const helpText =
         `❓ <b>HROne Bot Help & User Guide</b>\n\n` +
         `<b>Available Bot Commands:</b>\n` +
-        `• /mark - Punch attendance (Auto In/Out based on 9-hr rule)\n` +
+        `• /mark - Punch attendance (Smart Check-In / Check-Out)\n` +
+        `• /status - Live shift progress bar & hours remaining\n` +
         `• /workmode - Toggle between Office and WFH mode\n` +
         `• /wfh or /office - Switch mode directly\n` +
         `• /setwfh &lt;address&gt; - Update your WFH/home address\n` +
         `• /setoffice &lt;address&gt; - Update your office address\n` +
+        `• /resetoffice - Reset office to default (altF Coworking)\n` +
         `• /extend &lt;mins&gt; - Extend today's shift (e.g. /extend 30)\n` +
         `• /history - Open 1–31 day calendar date picker\n` +
-        `• /myhistory - View your MongoDB audit punch logs\n` +
         `• /stats - View monthly attendance analytics & hours\n` +
-        `• /status - Check engine status & current IST time\n` +
         `• /settings - Account profile & auto-punch toggle\n` +
-        `• /updatelocation - Change custom GPS work location\n` +
-        `• /updatecreds - Update HRone username & password\n` +
         `• /unregister - Delete profile from bot\n\n` +
         `⏰ <b>Smart 9-Hour Shift Rule:</b>\n` +
-        `• First punch of the day is automatically recorded as <b>Check-In</b>.\n` +
-        `• <b>Punch Out</b> requires at least <b>9 working hours</b> (plus any requested shift extensions).\n` +
-        `• If you have already Punched Out today, automated cron punches skip gracefully.\n\n` +
-        `Tap any interactive button below to navigate:`;
+        `• First punch of the day records <b>Check-In</b>.\n` +
+        `• <b>Punch Out</b> requires <b>9 working hours</b> (plus extensions).\n` +
+        `• Early out punch is available anytime via the confirmation prompt.\n\n` +
+        `Tap any button below to navigate:`;
 
-    await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard(user));
+    const keyboard = {
+        inline_keyboard: [
+            [
+                { text: '⚙️ Settings', callback_data: 'action_settings' },
+                { text: '🔙 Dashboard', callback_data: 'action_menu_back' }
+            ]
+        ]
+    };
+
+    if (messageId) {
+        await editTelegramMessage(helpText, chatId, messageId, keyboard);
+    } else {
+        await sendTelegramMessage(helpText, chatId, keyboard);
+    }
 }
 
 function getDatePickerKeyboard() {
@@ -1246,18 +1595,38 @@ function getDatePickerKeyboard() {
 
     rows.push([
         { text: '📍 Today\'s Logs', callback_data: 'action_history' },
-        { text: 'ℹ️ System Status', callback_data: 'action_status' }
+        { text: '🔙 Back to Menu', callback_data: 'action_settings' }
     ]);
 
     return { inline_keyboard: rows };
 }
 
-function getInteractiveKeyboard(user?: IUser | null) {
+function getInteractiveKeyboard(user?: IUser | null, shiftContext?: ShiftContext) {
     if (!user || user.registrationState !== 'IDLE') {
         return {
             inline_keyboard: [
                 [{ text: '🚀 Register HRone Account', callback_data: 'action_register' }]
             ]
+        };
+    }
+
+    const state = shiftContext?.state || 'NOT_CHECKED_IN';
+    let primaryBtn = { text: '🟢 Check-In Now', callback_data: 'action_mark' };
+
+    if (state === 'WORKING') {
+        primaryBtn = {
+            text: `⏳ Shift: ${shiftContext?.elapsedFormatted || '0h'} / 9h (Early Out ⚠️)`,
+            callback_data: 'action_prompt_early_out'
+        };
+    } else if (state === 'READY_TO_OUT') {
+        primaryBtn = {
+            text: '🔴 Check-Out Now (Shift Done 🎉)',
+            callback_data: 'action_mark'
+        };
+    } else if (state === 'COMPLETED') {
+        primaryBtn = {
+            text: `✅ Shift Completed (${shiftContext?.outTimeStr || 'Out'})`,
+            callback_data: 'action_history'
         };
     }
 
@@ -1267,24 +1636,40 @@ function getInteractiveKeyboard(user?: IUser | null) {
 
     return {
         inline_keyboard: [
-            [
-                { text: '📍 Punch Attendance Now', callback_data: 'action_mark' },
-                { text: '📊 Today Logs', callback_data: 'action_history' }
-            ],
+            [primaryBtn],
             [
                 workModeBtn,
-                { text: '⚙️ Settings', callback_data: 'action_settings' }
+                { text: '📊 Shift Status', callback_data: 'action_status' }
             ],
             [
-                { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
-                { text: '💾 DB Punch Logs', callback_data: 'action_myhistory' }
+                { text: '⚙️ More Tools & Settings', callback_data: 'action_settings' }
+            ]
+        ]
+    };
+}
+
+function getSettingsSubmenuKeyboard(user?: IUser | null) {
+    const isAutoOn = user?.autoMarkEnabled ?? true;
+    return {
+        inline_keyboard: [
+            [
+                { text: '📅 Calendar History', callback_data: 'action_pick_date' },
+                { text: '📈 Monthly Stats', callback_data: 'action_monthly_stats' }
             ],
             [
-                { text: '📈 Monthly Stats', callback_data: 'action_monthly_stats' },
-                { text: user.autoMarkEnabled ? '⏸️ Auto-Punch: On' : '▶️ Auto-Punch: Off', callback_data: 'action_toggle_auto' }
+                { text: '🏠 Set WFH Location', callback_data: 'action_set_wfh_loc' },
+                { text: '🏢 Set Office Location', callback_data: 'action_set_office_loc' }
             ],
             [
+                { text: '🏢 Reset Office to altF', callback_data: 'action_reset_office_default' },
+                { text: isAutoOn ? '⏸️ Auto: Enabled' : '▶️ Auto: Disabled', callback_data: 'action_toggle_auto' }
+            ],
+            [
+                { text: '💾 DB Audit Logs', callback_data: 'action_myhistory' },
                 { text: '❓ Help & Guide', callback_data: 'action_help' }
+            ],
+            [
+                { text: '🔙 Back to Dashboard', callback_data: 'action_menu_back' }
             ]
         ]
     };
@@ -1295,83 +1680,70 @@ function getFailureKeyboard(user?: IUser | null) {
         inline_keyboard: [
             [
                 { text: '🔄 Retry Punch Now', callback_data: 'action_mark' },
-                { text: '⚙️ Settings', callback_data: 'action_settings' }
+                { text: '📊 Status', callback_data: 'action_status' }
             ],
             [
-                { text: 'ℹ️ Check System Status', callback_data: 'action_status' }
+                { text: '⚙️ Settings', callback_data: 'action_settings' },
+                { text: '🔙 Dashboard', callback_data: 'action_menu_back' }
             ]
         ]
     };
 }
 
-async function handlePromptEarlyOut(chatId: string, user: IUser | null) {
+async function handlePromptEarlyOut(chatId: string, user: IUser | null, messageId?: number) {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
         return;
     }
 
-    const now = new Date();
-    const istParts = getISTParts(now);
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+    const shiftContext = await getTodayShiftContext(user, chatId);
 
-    const todayLogs = await AttendanceLog.find({
-        $or: [{ chatId }, { hrUsername: user.hrUsername }],
-        status: 'SUCCESS',
-        punchTime: { $regex: todayStr }
-    }).sort({ createdAt: 1 });
-
-    const inLog = todayLogs.find((l) => l.action === 'In');
-    const outLog = todayLogs.find((l) => l.action === 'Out');
-
-    if (outLog) {
-        await sendTelegramMessage('✅ You have already Punched Out today.', chatId, getInteractiveKeyboard(user));
+    if (shiftContext.outLog) {
+        const text = '✅ You have already Punched Out today.';
+        if (messageId) {
+            await editTelegramMessage(text, chatId, messageId, getInteractiveKeyboard(user, shiftContext));
+        } else {
+            await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user, shiftContext));
+        }
         return;
     }
 
-    if (!inLog) {
-        await sendTelegramMessage('⚠️ No Check-In record was found for today. You cannot punch out before checking in.', chatId, getInteractiveKeyboard(user));
+    if (!shiftContext.inLog) {
+        const text = '⚠️ No Check-In record was found for today. You cannot punch out before checking in.';
+        if (messageId) {
+            await editTelegramMessage(text, chatId, messageId, getInteractiveKeyboard(user, shiftContext));
+        } else {
+            await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user, shiftContext));
+        }
         return;
     }
-
-    const inTime = new Date(inLog.punchTime);
-    const elapsedMs = now.getTime() - inTime.getTime();
-    const elapsedHours = elapsedMs / (1000 * 60 * 60);
-
-    let extraMinutes = 0;
-    if (user.outPunchExtensionDate === todayStr && user.outPunchExtensionMinutes) {
-        extraMinutes = user.outPunchExtensionMinutes;
-    }
-    const requiredHours = 9 + (extraMinutes / 60);
-    const targetOutDate = new Date(inTime.getTime() + (requiredHours * 60 * 60 * 1000));
-    const remainingMs = Math.max(0, targetOutDate.getTime() - now.getTime());
-    const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
-    const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-
-    const inParts = getISTParts(inTime);
-    const inHour = inParts.hour % 12 || 12;
-    const inAmpm = inParts.hour >= 12 ? 'PM' : 'AM';
-    const inTimeStr = `${pad(inHour)}:${pad(inParts.minute)} ${inAmpm}`;
 
     const promptText =
         `⚠️ <b>Early Punch-Out Confirmation</b>\n\n` +
-        `<b>Account:</b> ${user.hrUsername}\n` +
-        `• <b>Check-In Time:</b> ${inTimeStr} IST\n` +
-        `• <b>Worked So Far:</b> ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m\n` +
-        `• <b>Shift Shortage:</b> ${remHours}h ${remMins}m short of 9 hours\n\n` +
+        `👤 <b>Account:</b> ${user.employeeName || user.hrUsername}\n` +
+        `• <b>Check-In Time:</b> ${shiftContext.inTimeStr} IST\n` +
+        `• <b>Worked So Far:</b> ${shiftContext.elapsedFormatted}\n` +
+        `• <b>Shift Shortage:</b> ${shiftContext.remainingFormatted} short of ${shiftContext.totalTargetHours}h\n\n` +
+        `${shiftContext.progressBar} <b>${shiftContext.percent}% Complete</b>\n\n` +
         `Are you sure you want to mark <b>Punch Out</b> early?`;
 
-    await sendTelegramMessage(promptText, chatId, {
+    const keyboard = {
         inline_keyboard: [
             [
                 { text: '✅ Yes, Confirm Early Punch-Out', callback_data: 'action_confirm_early_out' }
             ],
             [
                 { text: '⏳ Extend +30m Instead', callback_data: 'action_extend_30' },
-                { text: '❌ Cancel', callback_data: 'action_cancel' }
+                { text: '🔙 Back to Dashboard', callback_data: 'action_menu_back' }
             ]
         ]
-    });
+    };
+
+    if (messageId) {
+        await editTelegramMessage(promptText, chatId, messageId, keyboard);
+    } else {
+        await sendTelegramMessage(promptText, chatId, keyboard);
+    }
 }
 
 async function handleConfirmEarlyOut(chatId: string, user: IUser | null) {
@@ -1380,7 +1752,7 @@ async function handleConfirmEarlyOut(chatId: string, user: IUser | null) {
         return;
     }
 
-    await sendTelegramMessage('⏳ <b>Processing early attendance punch out...</b>', chatId);
+    const waitMsg = await sendTelegramMessage('⏳ <b>Processing early attendance punch out...</b>', chatId);
 
     try {
         const result = await markAttendance('Out', {
@@ -1404,7 +1776,7 @@ async function handleConfirmEarlyOut(chatId: string, user: IUser | null) {
             skipPunchOutDate: user.skipPunchOutDate,
         }, { allowEarlyOut: true });
 
-        await AttendanceLog.create({
+        const log = await AttendanceLog.create({
             chatId,
             hrUsername: user.hrUsername,
             action: 'Out',
@@ -1415,27 +1787,35 @@ async function handleConfirmEarlyOut(chatId: string, user: IUser | null) {
             responsePayload: result.response,
         });
 
-        const reqJson = JSON.stringify(result.requestPayload, null, 2);
-        const truncatedReq = reqJson.length > 1500 ? reqJson.substring(0, 1500) + '\n... (truncated)' : reqJson;
-
-        const resJson = JSON.stringify(result.response, null, 2);
-        const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
-
         const modeBadge = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
-        const successText =
-            `✅ <b>Early Attendance Punched Successfully!</b>\n\n` +
-            `<b>Account:</b> ${user.hrUsername}\n` +
-            `<b>Action:</b> Punch Out ⚠️ (Early Sign-Off)\n` +
-            `<b>Time:</b> ${result.punchTime} (IST)\n` +
-            `<b>Work Mode:</b> ${modeBadge}\n` +
-            `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n\n` +
-            `<b>📤 Sent Request Payload:</b>\n` +
-            `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
-            `<b>📥 Received API Response:</b>\n` +
-            `<pre><code class="language-json">${truncatedRes}</code></pre>`;
+        const empDisplay = user.employeeName ? `${user.employeeName} (<code>${user.hrUsername}</code>)` : `<code>${user.hrUsername}</code>`;
+        const shiftContext = await getTodayShiftContext(user, chatId);
 
-        await sendTelegramMessage(successText, chatId, getInteractiveKeyboard(user));
+        const successText =
+            `✅ <b>Early Attendance Punched Successfully!</b> ⚠️\n\n` +
+            `👤 <b>Employee:</b> ${empDisplay}\n` +
+            `⏰ <b>Punch Time:</b> ${result.punchTime} (IST)\n` +
+            `🏢 <b>Work Mode:</b> ${modeBadge}\n` +
+            `📍 <b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n` +
+            `🛡️ <b>Geofence:</b> Verified (Safe Micro-Jitter applied ✅)\n\n` +
+            `🎉 <b>Shift Summary:</b> Total Worked: <b>${shiftContext.elapsedFormatted}</b>`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '🔍 View Raw API Payload', callback_data: `action_payload_${log._id}` }],
+                ...getInteractiveKeyboard(user, shiftContext).inline_keyboard
+            ]
+        };
+
+        if (waitMsg && waitMsg.result?.message_id) {
+            await editTelegramMessage(successText, chatId, waitMsg.result.message_id, keyboard);
+        } else {
+            await sendTelegramMessage(successText, chatId, keyboard);
+        }
     } catch (error: any) {
+        if (waitMsg && waitMsg.result?.message_id) {
+            await deleteTelegramMessage(chatId, waitMsg.result.message_id);
+        }
         await AttendanceLog.create({
             chatId,
             hrUsername: user.hrUsername,
