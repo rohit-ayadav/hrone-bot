@@ -46,10 +46,20 @@ export async function GET(request: Request) {
                     hrPassword: user.hrPassword,
                     domainCode: user.domainCode,
                     employeeId: user.employeeId,
+                    workMode: user.workMode,
+                    officeLatitude: user.officeLatitude,
+                    officeLongitude: user.officeLongitude,
+                    officeGeoLocation: user.officeGeoLocation,
+                    wfhLatitude: user.wfhLatitude,
+                    wfhLongitude: user.wfhLongitude,
+                    wfhGeoLocation: user.wfhGeoLocation,
                     latitude: user.latitude,
                     longitude: user.longitude,
                     geoLocation: user.geoLocation,
                     geoAccuracy: user.geoAccuracy,
+                    outPunchExtensionMinutes: user.outPunchExtensionMinutes,
+                    outPunchExtensionDate: user.outPunchExtensionDate,
+                    skipPunchOutDate: user.skipPunchOutDate,
                 });
 
                 const reqJson = JSON.stringify(result.requestPayload, null, 2);
@@ -58,12 +68,14 @@ export async function GET(request: Request) {
                 const resJson = JSON.stringify(result.response, null, 2);
                 const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
 
+                const workModeDisplay = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
                 const successMessage =
                     `⏰ <b>Automated Attendance Triggered (Success)</b>\n\n` +
                     `<b>Account:</b> ${user.hrUsername}\n` +
                     `<b>Action:</b> Punch ${result.action}\n` +
                     `<b>Punch Time:</b> ${result.punchTime} (IST)\n` +
-                    `<b>Location:</b> ${user.geoLocation}\n` +
+                    `<b>Work Mode:</b> ${workModeDisplay}\n` +
+                    `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n` +
                     `<b>Status:</b> Success ✅\n\n` +
                     `<b>📤 Sent Request Payload:</b>\n` +
                     `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
@@ -106,7 +118,8 @@ export async function GET(request: Request) {
                 const isSkipReason = userErr.message && (
                     userErr.message.includes('Already Punched Out') ||
                     userErr.message.includes('Minimum 9 working hours required') ||
-                    userErr.message.includes('Check-In recorded today')
+                    userErr.message.includes('Check-In recorded today') ||
+                    userErr.message.includes('Auto Punch-Out skipped for today')
                 );
 
                 const now = new Date();
@@ -139,12 +152,23 @@ export async function GET(request: Request) {
                         reason: userErr.message,
                     });
                 } else {
+                    const isGatewayIssue = userErr.message && (
+                        userErr.message.includes('502') ||
+                        userErr.message.includes('503') ||
+                        userErr.message.includes('504') ||
+                        userErr.message.includes('Gateway')
+                    );
+
+                    const gatewayTip = isGatewayIssue
+                        ? `\n\n💡 <i>The HRone Gateway server timed out or returned a gateway error after 3 automatic retries. Peak morning/evening traffic may be affecting HRone.</i>`
+                        : '';
+
                     const failureMessage =
                         `🚨 <b>Automated Attendance Failed!</b>\n\n` +
                         `<b>Account:</b> ${user.hrUsername}\n` +
                         `<b>Error:</b> ${userErr.message || 'Unknown error'}\n` +
                         `<b>Timestamp:</b> ${istTime} (IST)\n` +
-                        `<b>Domain:</b> ${user.domainCode || 'uharvest'}\n\n` +
+                        `<b>Domain:</b> ${user.domainCode || 'uharvest'}${gatewayTip}\n\n` +
                         (userErr.stack ? `<b>Stack Trace:</b>\n<pre><code>${userErr.stack.substring(0, 800)}</code></pre>` : '');
 
                     if (user.chatId) {

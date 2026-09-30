@@ -18,6 +18,16 @@ export interface IUser extends Document {
   company?: string;
   mobileNo?: string;
   email?: string;
+  workMode?: 'OFFICE' | 'WFH';
+  officeLatitude?: string;
+  officeLongitude?: string;
+  officeGeoLocation?: string;
+  wfhLatitude?: string;
+  wfhLongitude?: string;
+  wfhGeoLocation?: string;
+  outPunchExtensionMinutes?: number;
+  outPunchExtensionDate?: string;
+  skipPunchOutDate?: string;
   autoMarkEnabled: boolean;
   registrationState: 'IDLE' | 'AWAITING_HR_USERNAME' | 'AWAITING_HR_PASSWORD' | 'AWAITING_LOCATION' | 'AWAITING_TRANSFER_OTP';
   transferOtp?: string;
@@ -42,6 +52,16 @@ const UserSchema: Schema<IUser> = new Schema<IUser>(
     company: { type: String, default: '' },
     mobileNo: { type: String, default: '' },
     email: { type: String, default: '' },
+    workMode: { type: String, enum: ['OFFICE', 'WFH'], default: 'OFFICE' },
+    officeLatitude: { type: String, default: '28.500385614012345' },
+    officeLongitude: { type: String, default: '77.41499672380527' },
+    officeGeoLocation: { type: String, default: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India' },
+    wfhLatitude: { type: String, default: '' },
+    wfhLongitude: { type: String, default: '' },
+    wfhGeoLocation: { type: String, default: '' },
+    outPunchExtensionMinutes: { type: Number, default: 0 },
+    outPunchExtensionDate: { type: String, default: '' },
+    skipPunchOutDate: { type: String, default: '' },
     latitude: { type: String, default: '28.500385614012345' },
     longitude: { type: String, default: '77.41499672380527' },
     geoLocation: { type: String, default: '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India' },

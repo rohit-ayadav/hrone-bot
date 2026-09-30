@@ -114,6 +114,13 @@ export async function verifyAndExecuteTransfer(
         requestingUser.company = targetOldUser.company;
         requestingUser.mobileNo = targetOldUser.mobileNo;
         requestingUser.email = targetOldUser.email;
+        requestingUser.workMode = targetOldUser.workMode || 'OFFICE';
+        requestingUser.officeLatitude = targetOldUser.officeLatitude;
+        requestingUser.officeLongitude = targetOldUser.officeLongitude;
+        requestingUser.officeGeoLocation = targetOldUser.officeGeoLocation;
+        requestingUser.wfhLatitude = targetOldUser.wfhLatitude;
+        requestingUser.wfhLongitude = targetOldUser.wfhLongitude;
+        requestingUser.wfhGeoLocation = targetOldUser.wfhGeoLocation;
         requestingUser.latitude = targetOldUser.latitude;
         requestingUser.longitude = targetOldUser.longitude;
         requestingUser.geoLocation = targetOldUser.geoLocation;

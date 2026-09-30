@@ -9,16 +9,27 @@ export interface UserProfile {
     hrPassword?: string;
     domainCode?: string;
     employeeId?: number;
+    workMode?: 'OFFICE' | 'WFH';
+    officeLatitude?: string;
+    officeLongitude?: string;
+    officeGeoLocation?: string;
+    wfhLatitude?: string;
+    wfhLongitude?: string;
+    wfhGeoLocation?: string;
     latitude?: string;
     longitude?: string;
     geoLocation?: string;
     geoAccuracy?: string;
+    outPunchExtensionMinutes?: number;
+    outPunchExtensionDate?: string;
+    skipPunchOutDate?: string;
 }
 
 export interface MarkAttendanceResult {
     success: boolean;
     action: 'In' | 'Out';
     punchTime: string;
+    workMode?: 'OFFICE' | 'WFH';
     requestPayload: any;
     response: any;
 }
@@ -37,6 +48,123 @@ export interface VerifyHROneResult {
     error?: string;
 }
 
+export interface FetchRetryOptions extends RequestInit {
+    retries?: number;
+    initialDelayMs?: number;
+    backoffFactor?: number;
+    timeoutMs?: number;
+    retryOnStatuses?: number[];
+}
+
+/**
+ * Robust fetch wrapper with configurable exponential backoff retry and timeout.
+ */
+export async function fetchWithRetry(
+    url: string,
+    options: FetchRetryOptions = {}
+): Promise<Response> {
+    const retries = options.retries ?? 3;
+    const initialDelay = options.initialDelayMs ?? 1500;
+    const factor = options.backoffFactor ?? 2;
+    const timeout = options.timeoutMs ?? 15000;
+    const retryStatuses = options.retryOnStatuses ?? [408, 429, 500, 502, 503, 504];
+
+    let lastError: any = null;
+    let delay = initialDelay;
+
+    for (let attempt = 1; attempt <= retries + 1; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+
+        try {
+            const res = await fetch(url, {
+                ...options,
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+
+            if (attempt <= retries && retryStatuses.includes(res.status)) {
+                console.warn(
+                    `[HRone Gateway Retry] ${url} returned HTTP ${res.status}. Retrying in ${delay}ms (attempt ${attempt}/${retries})...`
+                );
+                await new Promise((r) => setTimeout(r, delay));
+                delay *= factor;
+                continue;
+            }
+
+            return res;
+        } catch (err: any) {
+            clearTimeout(timer);
+            lastError = err;
+            const isAbort = err.name === 'AbortError';
+            const isNetworkError =
+                isAbort ||
+                err.message?.includes('fetch failed') ||
+                err.message?.includes('ECONNRESET') ||
+                err.message?.includes('ETIMEDOUT') ||
+                err.message?.includes('socket');
+
+            if (attempt <= retries && isNetworkError) {
+                console.warn(
+                    `[HRone Gateway Retry] ${url} network error (${err.message}). Retrying in ${delay}ms (attempt ${attempt}/${retries})...`
+                );
+                await new Promise((r) => setTimeout(r, delay));
+                delay *= factor;
+                continue;
+            }
+
+            throw err;
+        }
+    }
+
+    throw lastError || new Error(`Request to ${url} failed after ${retries} retries`);
+}
+
+/**
+ * Returns the effective punch location (Office vs WFH) based on the user's active workMode.
+ */
+export function getEffectiveUserLocation(profile?: UserProfile): {
+    latitude: string;
+    longitude: string;
+    geoLocation: string;
+    geoAccuracy: string;
+    workMode: 'OFFICE' | 'WFH';
+} {
+    const isWfh = profile?.workMode === 'WFH';
+    const lat = isWfh
+        ? (profile?.wfhLatitude || profile?.latitude || '28.500385614012345')
+        : (profile?.officeLatitude || profile?.latitude || '28.500385614012345');
+    const lng = isWfh
+        ? (profile?.wfhLongitude || profile?.longitude || '77.41499672380527')
+        : (profile?.officeLongitude || profile?.longitude || '77.41499672380527');
+    const loc = isWfh
+        ? (profile?.wfhGeoLocation || 'Home / WFH Location')
+        : (profile?.officeGeoLocation || profile?.geoLocation || '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India');
+
+    return {
+        latitude: lat,
+        longitude: lng,
+        geoLocation: loc,
+        geoAccuracy: profile?.geoAccuracy || '10',
+        workMode: isWfh ? 'WFH' : 'OFFICE',
+    };
+}
+
+/**
+ * Adds natural GPS micro-variance (approx ±5-10 meters) so coordinates simulate real device GPS fluctuations.
+ */
+export function applyGpsJitter(latStr: string, lngStr: string): { latitude: string; longitude: string } {
+    const lat = parseFloat(latStr);
+    const lng = parseFloat(lngStr);
+    if (isNaN(lat) || isNaN(lng)) return { latitude: latStr, longitude: lngStr };
+    const latJitter = (Math.random() - 0.5) * 0.00010;
+    const lngJitter = (Math.random() - 0.5) * 0.00010;
+    return {
+        latitude: (lat + latJitter).toFixed(14),
+        longitude: (lng + lngJitter).toFixed(14),
+    };
+}
+
 export async function verifyHROneCredentials(
     username: string,
     passwordInput: string,
@@ -44,7 +172,7 @@ export async function verifyHROneCredentials(
 ): Promise<VerifyHROneResult> {
     const password = decrypt(passwordInput);
     try {
-        const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
+        const tokenRes = await fetchWithRetry('https://gateway.app.hrone.cloud/oauth2/token', {
             method: 'POST',
             headers: {
                 'accept': 'application/json, text/plain, */*',
@@ -67,12 +195,15 @@ export async function verifyHROneCredentials(
             }),
         });
 
-        const tokenData = await tokenRes.json();
+        const tokenData = await tokenRes.json().catch(() => ({}));
 
         if (!tokenRes.ok || !tokenData.access_token) {
+            const isGatewayIssue = [502, 503, 504].includes(tokenRes.status);
             return {
                 valid: false,
-                error: tokenData.error_description || tokenData.message || 'Invalid HRone credentials',
+                error: isGatewayIssue
+                    ? `HRone Cloud Gateway temporary error (HTTP ${tokenRes.status}). Please retry in a few moments.`
+                    : (tokenData.error_description || tokenData.message || 'Invalid HRone credentials'),
             };
         }
 
@@ -103,7 +234,7 @@ export async function verifyHROneCredentials(
         let email = '';
 
         try {
-            const detailRes = await fetch('https://app.hrone.cloud/api/LogOnUser/LogOnUserDetail', {
+            const detailRes = await fetchWithRetry('https://app.hrone.cloud/api/LogOnUser/LogOnUserDetail', {
                 method: 'GET',
                 headers: {
                     'accept': 'application/json, text/plain, */*',
@@ -227,17 +358,17 @@ export async function markAttendance(
     const password = decrypt(rawPassword || '');
     const domain = profile?.domainCode || 'uharvest';
     const empId = profile?.employeeId || 4050;
-    const lat = profile?.latitude || '28.500385614012345';
-    const lng = profile?.longitude || '77.41499672380527';
-    const accuracy = profile?.geoAccuracy || '10';
-    const locAddress = profile?.geoLocation || '210-211, altF Coworking Space, Sector 142, Noida, Uttar Pradesh 201304, India';
 
     if (!username || !password) {
         throw new Error('Missing HRone login credentials');
     }
 
-    // 1. Fetch Fresh OAuth Token
-    const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
+    // Determine effective location (Office vs WFH) and apply natural GPS drift
+    const effectiveLoc = getEffectiveUserLocation(profile);
+    const jittered = applyGpsJitter(effectiveLoc.latitude, effectiveLoc.longitude);
+
+    // 1. Fetch Fresh OAuth Token with retry support
+    const tokenRes = await fetchWithRetry('https://gateway.app.hrone.cloud/oauth2/token', {
         method: 'POST',
         headers: {
             'accept': 'application/json, text/plain, */*',
@@ -260,10 +391,15 @@ export async function markAttendance(
         }),
     });
 
-    const tokenData = await tokenRes.json();
+    const tokenData = await tokenRes.json().catch(() => ({}));
 
     if (!tokenRes.ok || !tokenData.access_token) {
-        throw new Error(tokenData.error_description || tokenData.message || 'Failed to authenticate with HRone Gateway');
+        const isGateway = [502, 503, 504].includes(tokenRes.status);
+        throw new Error(
+            isGateway
+                ? `HRone Cloud Gateway temporary error (HTTP ${tokenRes.status}). Please retry in a few moments.`
+                : (tokenData.error_description || tokenData.message || 'Failed to authenticate with HRone Gateway')
+        );
     }
 
     const jwtToken = tokenData.access_token;
@@ -314,7 +450,14 @@ export async function markAttendance(
         console.error('Warning: Error reading AttendanceLog from MongoDB:', e);
     }
 
-    // Determine Punch Action based on today's state & 9-hour rule
+    // Check if user requested to skip automated punch-out for today
+    if (profile?.skipPunchOutDate === todayStr && !overrideAction) {
+        if (hasPunchedInToday && !hasPunchedOutToday) {
+            throw new Error(`Auto Punch-Out skipped for today by user request.`);
+        }
+    }
+
+    // Determine Punch Action based on today's state & 9-hour rule (+ any overtime extensions)
     let action: 'In' | 'Out';
 
     if (overrideAction) {
@@ -326,20 +469,27 @@ export async function markAttendance(
             `Already Punched Out today (Recorded at ${timeOutStr || 'earlier today'}). No further automated punch required.`
         );
     } else {
-        // User has checked in today, but not checked out! Check if 9 hours have elapsed.
+        // User has checked in today, but not checked out! Check 9 hours + optional overtime extension
         const elapsedMs = now.getTime() - firstPunchDate.getTime();
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
 
-        if (elapsedHours < 9) {
-            const targetOutDate = new Date(firstPunchDate.getTime() + 9 * 60 * 60 * 1000);
+        let extraMinutes = 0;
+        if (profile?.outPunchExtensionDate === todayStr && profile?.outPunchExtensionMinutes) {
+            extraMinutes = profile.outPunchExtensionMinutes;
+        }
+        const requiredHours = 9 + (extraMinutes / 60);
+
+        if (elapsedHours < requiredHours) {
+            const targetOutDate = new Date(firstPunchDate.getTime() + (requiredHours * 60 * 60 * 1000));
             const remainingMs = targetOutDate.getTime() - now.getTime();
             const remHours = Math.floor(remainingMs / (1000 * 60 * 60));
             const remMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
             const inTimeFormatted = formatTimeString(firstPunchDate);
             const outTimeFormatted = formatTimeString(targetOutDate);
+            const extNotice = extraMinutes > 0 ? ` (+${extraMinutes}m shift extension applied)` : '';
 
             throw new Error(
-                `Check-In recorded today at ${inTimeFormatted} IST. Minimum 9 working hours required before Punch Out.\n` +
+                `Check-In recorded today at ${inTimeFormatted} IST. Minimum 9 working hours${extNotice} required before Punch Out.\n` +
                 `Time Elapsed: ${Math.floor(elapsedHours)}h ${Math.floor((elapsedHours % 1) * 60)}m.\n` +
                 `Eligible for Punch Out after ${outTimeFormatted} IST (${remHours}h ${remMins}m remaining).`
             );
@@ -352,10 +502,10 @@ export async function markAttendance(
         requestType: 'A',
         applyRequestSource: 10,
         employeeId: empId,
-        latitude: lat,
-        longitude: lng,
-        geoAccuracy: accuracy,
-        geoLocation: locAddress,
+        latitude: jittered.latitude,
+        longitude: jittered.longitude,
+        geoAccuracy: effectiveLoc.geoAccuracy,
+        geoLocation: effectiveLoc.geoLocation,
         punchTime: punchTime,
         remarks: action,
         uploadedPhotoOneName: '',
@@ -366,8 +516,8 @@ export async function markAttendance(
         attendanceType: 'Online',
     };
 
-    // 3. Mark Attendance
-    const attendanceRes = await fetch('https://app.hrone.cloud/api/timeoffice/mobile/checkin/Attendance/Request', {
+    // 4. Mark Attendance with retry support
+    const attendanceRes = await fetchWithRetry('https://app.hrone.cloud/api/timeoffice/mobile/checkin/Attendance/Request', {
         method: 'POST',
         headers: {
             'accept': 'application/json, text/plain, */*',
@@ -383,16 +533,22 @@ export async function markAttendance(
         body: JSON.stringify(requestPayload),
     });
 
-    const attendanceData = await attendanceRes.json();
+    const attendanceData = await attendanceRes.json().catch(() => ({}));
 
     if (!attendanceRes.ok) {
-        throw new Error(attendanceData.message || attendanceData.error || `Attendance API HTTP ${attendanceRes.status}`);
+        const isGateway = [502, 503, 504].includes(attendanceRes.status);
+        throw new Error(
+            isGateway
+                ? `HRone Cloud Gateway temporary error (HTTP ${attendanceRes.status}). Please retry in a few moments.`
+                : (attendanceData.message || attendanceData.error || `Attendance API HTTP ${attendanceRes.status}`)
+        );
     }
 
     return {
         success: true,
         action,
         punchTime,
+        workMode: effectiveLoc.workMode,
         requestPayload,
         response: attendanceData,
     };
@@ -409,8 +565,8 @@ export async function getAttendanceHistory(targetDate?: string, profile?: UserPr
         throw new Error('Missing HRone credentials');
     }
 
-    // 1. Fetch OAuth token
-    const tokenRes = await fetch('https://gateway.app.hrone.cloud/oauth2/token', {
+    // 1. Fetch OAuth token with retry
+    const tokenRes = await fetchWithRetry('https://gateway.app.hrone.cloud/oauth2/token', {
         method: 'POST',
         headers: {
             'accept': 'application/json, text/plain, */*',
@@ -433,9 +589,14 @@ export async function getAttendanceHistory(targetDate?: string, profile?: UserPr
         }),
     });
 
-    const tokenData = await tokenRes.json();
+    const tokenData = await tokenRes.json().catch(() => ({}));
     if (!tokenRes.ok || !tokenData.access_token) {
-        throw new Error(tokenData.error_description || 'Failed to authenticate with HRone Gateway');
+        const isGateway = [502, 503, 504].includes(tokenRes.status);
+        throw new Error(
+            isGateway
+                ? `HRone Cloud Gateway temporary error (HTTP ${tokenRes.status}).`
+                : (tokenData.error_description || 'Failed to authenticate with HRone Gateway')
+        );
     }
 
     const jwtToken = tokenData.access_token;
@@ -461,15 +622,15 @@ export async function getAttendanceHistory(targetDate?: string, profile?: UserPr
         'cookie': `JwtTokenCookie=${jwtToken}; RefreshTokenCookie=${refreshToken}`,
     };
 
-    // 2. Query Daywise & RawPunch API
+    // 2. Query Daywise & RawPunch API with retry
     try {
         const [daywiseRes, rawPunchRes] = await Promise.all([
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/${empId}/${dateStr}`, { method: 'GET', headers }),
-            fetch(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/${empId}/${dateStr}/true`, { method: 'GET', headers })
+            fetchWithRetry(`https://app.hrone.cloud/api/timeoffice/attendance/Daywise/${empId}/${dateStr}`, { method: 'GET', headers }),
+            fetchWithRetry(`https://app.hrone.cloud/api/timeoffice/attendance/RawPunch/${empId}/${dateStr}/true`, { method: 'GET', headers })
         ]);
 
-        const daywiseData = daywiseRes.ok ? await daywiseRes.json() : null;
-        const rawPunchData = (rawPunchRes.ok && rawPunchRes.status === 200) ? await rawPunchRes.json() : [];
+        const daywiseData = daywiseRes.ok ? await daywiseRes.json().catch(() => null) : null;
+        const rawPunchData = (rawPunchRes.ok && rawPunchRes.status === 200) ? await rawPunchRes.json().catch(() => []) : [];
 
         const daySummary = Array.isArray(daywiseData) && daywiseData.length > 0 ? daywiseData[0] : null;
 

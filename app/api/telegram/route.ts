@@ -2,7 +2,13 @@ import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/db';
 import User, { IUser } from '@/models/User';
 import AttendanceLog from '@/models/AttendanceLog';
-import { markAttendance, getAttendanceHistory, verifyHROneCredentials } from '@/lib/markAttendance';
+import {
+    markAttendance,
+    getAttendanceHistory,
+    verifyHROneCredentials,
+    getISTParts,
+    getEffectiveUserLocation
+} from '@/lib/markAttendance';
 import { sendTelegramMessage, answerCallbackQuery, reverseGeocode } from '@/lib/telegram';
 import { encrypt } from '@/lib/crypto';
 import {
@@ -32,6 +38,22 @@ export async function POST(request: Request) {
                 await startRegistrationWizard(chatId, callbackQuery.from?.username);
             } else if (data === 'action_mark') {
                 await handleMarkAttendance(chatId, user);
+            } else if (data === 'action_toggle_workmode') {
+                await handleToggleWorkMode(chatId, user);
+            } else if (data === 'action_set_mode_office') {
+                await handleSetMode(chatId, user, 'OFFICE');
+            } else if (data === 'action_set_mode_wfh') {
+                await handleSetMode(chatId, user, 'WFH');
+            } else if (data === 'action_extend_30') {
+                await handleExtendPunchOut(chatId, user, 30);
+            } else if (data === 'action_extend_60') {
+                await handleExtendPunchOut(chatId, user, 60);
+            } else if (data === 'action_skip_out_today') {
+                await handleSkipOutToday(chatId, user);
+            } else if (data === 'action_set_wfh_loc') {
+                await handleSetWfhCommand(chatId, user);
+            } else if (data === 'action_set_office_loc') {
+                await handleSetOfficeCommand(chatId, user);
             } else if (data === 'action_status') {
                 await handleStatusRequest(chatId, user);
             } else if (data === 'action_history') {
@@ -93,17 +115,28 @@ export async function POST(request: Request) {
             const { latitude, longitude } = message.location;
             if (user) {
                 const geoAddr = await reverseGeocode(latitude, longitude);
-                user.latitude = String(latitude);
-                user.longitude = String(longitude);
-                user.geoLocation = geoAddr;
+                if (user.workMode === 'WFH') {
+                    user.wfhLatitude = String(latitude);
+                    user.wfhLongitude = String(longitude);
+                    user.wfhGeoLocation = geoAddr;
+                } else {
+                    user.officeLatitude = String(latitude);
+                    user.officeLongitude = String(longitude);
+                    user.officeGeoLocation = geoAddr;
+                    user.latitude = String(latitude);
+                    user.longitude = String(longitude);
+                    user.geoLocation = geoAddr;
+                }
                 user.registrationState = 'IDLE';
                 await user.save();
 
+                const modeBadge = user.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
                 const successText =
-                    `📍 <b>Live GPS Location Updated Successfully!</b>\n\n` +
+                    `📍 <b>${modeBadge} GPS Location Updated Successfully!</b>\n\n` +
                     `<b>Latitude:</b> <code>${latitude}</code>\n` +
                     `<b>Longitude:</b> <code>${longitude}</code>\n` +
-                    `<b>Geo Address:</b> ${geoAddr}`;
+                    `<b>Geo Address:</b> ${geoAddr}\n\n` +
+                    `Punches under <b>${modeBadge}</b> mode will now use this location.`;
 
                 await sendTelegramMessage(successText, chatId, {
                     ...getInteractiveKeyboard(user),
@@ -301,6 +334,24 @@ export async function POST(request: Request) {
             }
         } else if (text.startsWith('/changeusername')) {
             await handleChangeUsernameRequest(chatId, user);
+        } else if (text.startsWith('/workmode') || text.startsWith('/toggleworkmode')) {
+            await handleToggleWorkMode(chatId, user);
+        } else if (text.startsWith('/wfh')) {
+            await handleSetMode(chatId, user, 'WFH');
+        } else if (text.startsWith('/office')) {
+            await handleSetMode(chatId, user, 'OFFICE');
+        } else if (text.startsWith('/setwfh')) {
+            const parts = text.split(' ');
+            const customAddr = parts.slice(1).join(' ').trim();
+            await handleSetWfhCommand(chatId, user, customAddr);
+        } else if (text.startsWith('/setoffice')) {
+            const parts = text.split(' ');
+            const customAddr = parts.slice(1).join(' ').trim();
+            await handleSetOfficeCommand(chatId, user, customAddr);
+        } else if (text.startsWith('/extend')) {
+            const parts = text.split(' ');
+            const mins = parseInt(parts[1] || '30', 10) || 30;
+            await handleExtendPunchOut(chatId, user, mins);
         } else if (text.startsWith('/mark')) {
             await handleMarkAttendance(chatId, user);
         } else if (text.startsWith('/status')) {
@@ -337,7 +388,7 @@ export async function POST(request: Request) {
         } else {
             await sendTelegramMessage(
                 `🤖 <b>HROne Bot Instructions</b>\n\n` +
-                `Send /mark to punch attendance, /history to pick date history, or /settings for account info.`,
+                `Send /mark to punch attendance, /workmode to toggle Office/WFH, /history for history, or /settings for account info.`,
                 chatId,
                 getInteractiveKeyboard(user)
             );
@@ -444,10 +495,20 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
             hrPassword: user.hrPassword,
             domainCode: user.domainCode,
             employeeId: user.employeeId,
+            workMode: user.workMode,
+            officeLatitude: user.officeLatitude,
+            officeLongitude: user.officeLongitude,
+            officeGeoLocation: user.officeGeoLocation,
+            wfhLatitude: user.wfhLatitude,
+            wfhLongitude: user.wfhLongitude,
+            wfhGeoLocation: user.wfhGeoLocation,
             latitude: user.latitude,
             longitude: user.longitude,
             geoLocation: user.geoLocation,
             geoAccuracy: user.geoAccuracy,
+            outPunchExtensionMinutes: user.outPunchExtensionMinutes,
+            outPunchExtensionDate: user.outPunchExtensionDate,
+            skipPunchOutDate: user.skipPunchOutDate,
         });
 
         await AttendanceLog.create({
@@ -467,12 +528,14 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
         const resJson = JSON.stringify(result.response, null, 2);
         const truncatedRes = resJson.length > 1500 ? resJson.substring(0, 1500) + '\n... (truncated)' : resJson;
 
+        const modeBadge = result.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
         const successText =
             `✅ <b>Attendance Punched Successfully!</b>\n\n` +
             `<b>Account:</b> ${user.hrUsername}\n` +
             `<b>Action:</b> Punch ${result.action}\n` +
             `<b>Time:</b> ${result.punchTime} (IST)\n` +
-            `<b>Location:</b> ${user.geoLocation}\n\n` +
+            `<b>Work Mode:</b> ${modeBadge}\n` +
+            `<b>Location:</b> ${result.requestPayload?.geoLocation || user.geoLocation}\n\n` +
             `<b>📤 Sent Request Payload:</b>\n` +
             `<pre><code class="language-json">${truncatedReq}</code></pre>\n\n` +
             `<b>📥 Received API Response:</b>\n` +
@@ -493,11 +556,22 @@ async function handleMarkAttendance(chatId: string, user: IUser | null) {
         const now = new Date();
         const istTime = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
+        const isGateway = error.message && (
+            error.message.includes('502') ||
+            error.message.includes('503') ||
+            error.message.includes('504') ||
+            error.message.includes('Gateway')
+        );
+
+        const gatewayTip = isGateway
+            ? `\n\n💡 <i>The HRone Gateway returned a server error after 3 automatic retries. HRone cloud servers may be experiencing high rush-hour load.</i>`
+            : '';
+
         const errorText =
             `❌ <b>Attendance Punch Failed!</b>\n\n` +
             `<b>Account:</b> ${user.hrUsername}\n` +
             `<b>Error:</b> ${error.message || 'Unknown error'}\n` +
-            `<b>Timestamp:</b> ${istTime} (IST)\n` +
+            `<b>Timestamp:</b> ${istTime} (IST)${gatewayTip}\n` +
             (error.stack ? `<b>Stack Trace:</b>\n<pre><code>${error.stack.substring(0, 800)}</code></pre>` : '');
 
         await sendTelegramMessage(errorText, chatId, getFailureKeyboard(user));
@@ -650,6 +724,20 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
     const desigDisplay = user.designation ? `\n<b>Designation:</b> ${user.designation}` : '';
     const deptDisplay = user.department ? `\n<b>Department:</b> ${user.department}` : '';
     const companyDisplay = user.company ? `\n<b>Company:</b> ${user.company}` : '';
+    const workModeDisplay = user.workMode === 'WFH' ? '🏠 WFH (Work From Home)' : '🏢 Office';
+    const officeAddr = user.officeGeoLocation || user.geoLocation || 'altF Coworking, Sector 142 Noida';
+    const wfhAddr = user.wfhGeoLocation || '<i>Not set yet (tap button below to set)</i>';
+
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    let extDisplay = 'None';
+    if (user.outPunchExtensionDate === todayStr && user.outPunchExtensionMinutes) {
+        extDisplay = `+${user.outPunchExtensionMinutes}m (Active Today)`;
+    }
+    const skipDisplay = user.skipPunchOutDate === todayStr ? 'Yes (Skipped for today)' : 'No';
 
     const settingsText =
         `⚙️ <b>Account Profile & Settings</b>\n\n` +
@@ -659,15 +747,39 @@ async function handleSettingsRequest(chatId: string, user: IUser | null) {
         `${desigDisplay}` +
         `${deptDisplay}` +
         `${companyDisplay}\n` +
+        `<b>Active Work Mode:</b> ${workModeDisplay}\n` +
+        `🏢 <b>Office Address:</b> ${officeAddr}\n` +
+        `🏠 <b>WFH Address:</b> ${wfhAddr}\n\n` +
         `<b>Auto-Punch Status:</b> ${user.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
-        `<b>Geo Address:</b> ${user.geoLocation}\n\n` +
+        `<b>Today Shift Extension:</b> ${extDisplay}\n` +
+        `<b>Skip Auto-Out Today:</b> ${skipDisplay}\n\n` +
         `<b>Available Management Commands:</b>\n` +
+        `• /workmode - Toggle between Office and WFH mode\n` +
+        `• /wfh or /office - Directly switch work mode\n` +
+        `• /setwfh &lt;address&gt; - Set your Home/WFH location\n` +
+        `• /setoffice &lt;address&gt; - Set your Office location\n` +
+        `• /extend &lt;mins&gt; - Extend today's shift (e.g. /extend 30)\n` +
         `• /toggleauto - Enable or disable automated cron punch\n` +
-        `• /updatelocation - Change custom location address\n` +
         `• /updatecreds - Update HRone username/password\n` +
         `• /unregister - Delete account profile from bot`;
 
-    await sendTelegramMessage(settingsText, chatId, getInteractiveKeyboard(user));
+    const toggleModeText = user.workMode === 'WFH' ? '🏢 Switch to Office Mode' : '🏠 Switch to WFH Mode';
+
+    await sendTelegramMessage(settingsText, chatId, {
+        inline_keyboard: [
+            [
+                { text: toggleModeText, callback_data: 'action_toggle_workmode' }
+            ],
+            [
+                { text: '🏠 Set WFH Location', callback_data: 'action_set_wfh_loc' },
+                { text: '🏢 Set Office Location', callback_data: 'action_set_office_loc' }
+            ],
+            [
+                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' },
+                { text: '📍 Punch Attendance Now', callback_data: 'action_mark' }
+            ]
+        ]
+    });
 }
 
 function getLocationKeyboard() {
@@ -685,20 +797,197 @@ function getLocationKeyboard() {
     };
 }
 
-async function handleLocationUpdateRequest(chatId: string, user: IUser | null) {
+async function handleLocationUpdateRequest(chatId: string, user: IUser | null, targetMode?: 'OFFICE' | 'WFH') {
     if (!user || user.registrationState !== 'IDLE') {
         await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
         return;
     }
 
+    if (targetMode) {
+        user.workMode = targetMode;
+        await user.save();
+    }
+
     user.registrationState = 'AWAITING_LOCATION';
     await user.save();
 
+    const modeLabel = (targetMode || user.workMode) === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
     const text =
-        `📍 <b>Update Work GPS Location</b>\n\n` +
-        `Tap <b>"📍 Share My Live GPS Location"</b> below to automatically update your GPS coordinates, or reply with a custom location text/address:`;
+        `📍 <b>Update ${modeLabel} Location</b>\n\n` +
+        `Tap <b>"📍 Share My Live GPS Location"</b> below to automatically update your coordinates, or reply with an address (e.g., <code>/setwfh Sector 142, Noida</code>):`;
 
     await sendTelegramMessage(text, chatId, getLocationKeyboard());
+}
+
+async function handleToggleWorkMode(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    const newMode: 'OFFICE' | 'WFH' = user.workMode === 'WFH' ? 'OFFICE' : 'WFH';
+    user.workMode = newMode;
+    await user.save();
+
+    if (newMode === 'WFH') {
+        const wfhLocation = user.wfhGeoLocation;
+        const locMsg = wfhLocation
+            ? `<b>Active WFH Address:</b> ${wfhLocation}`
+            : `⚠️ <i>No dedicated WFH location set yet!</i>\nShare your live GPS location pin 📍 or type <code>/setwfh &lt;address&gt;</code> to save your home coordinates.`;
+
+        const text =
+            `🏠 <b>Work Mode Switched to WFH (Work From Home)</b>\n\n` +
+            `${locMsg}\n\n` +
+            `Scheduled automated and manual attendance punches will now record under <b>WFH mode</b>.`;
+
+        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+    } else {
+        const officeLocation = user.officeGeoLocation || user.geoLocation || 'altF Coworking Space, Sector 142, Noida';
+        const text =
+            `🏢 <b>Work Mode Switched to Office</b>\n\n` +
+            `<b>Active Office Address:</b> ${officeLocation}\n\n` +
+            `Scheduled automated and manual attendance punches will now record under <b>Office mode</b>.`;
+
+        await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+    }
+}
+
+async function handleSetMode(chatId: string, user: IUser | null, mode: 'OFFICE' | 'WFH') {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+    user.workMode = mode;
+    await user.save();
+
+    const isWfh = mode === 'WFH';
+    const loc = isWfh
+        ? (user.wfhGeoLocation || 'Home / WFH')
+        : (user.officeGeoLocation || user.geoLocation || 'altF Coworking Space, Sector 142, Noida');
+
+    const text =
+        `${isWfh ? '🏠' : '🏢'} <b>Work Mode Set to ${mode}</b>\n\n` +
+        `<b>Active Location:</b> ${loc}\n\n` +
+        `Punches will now use this work location.`;
+
+    await sendTelegramMessage(text, chatId, getInteractiveKeyboard(user));
+}
+
+async function handleSetWfhCommand(chatId: string, user: IUser | null, customAddr?: string) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    if (!customAddr) {
+        user.workMode = 'WFH';
+        await user.save();
+        await sendTelegramMessage(
+            `🏠 <b>Set WFH (Home) Location</b>\n\n` +
+            `Please share your live GPS location pin 📍 or reply with your home address:\n` +
+            `Example: <code>/setwfh Tower 3, Express View, Sector 93, Noida</code>`,
+            chatId,
+            getLocationKeyboard()
+        );
+        return;
+    }
+
+    user.workMode = 'WFH';
+    user.wfhGeoLocation = customAddr;
+    await user.save();
+
+    await sendTelegramMessage(
+        `🏠 <b>WFH Location Updated Successfully!</b>\n\n` +
+        `<b>Address:</b> ${customAddr}\n` +
+        `<b>Work Mode:</b> 🏠 WFH Active\n\n` +
+        `Future punches will now use this WFH address.`,
+        chatId,
+        getInteractiveKeyboard(user)
+    );
+}
+
+async function handleSetOfficeCommand(chatId: string, user: IUser | null, customAddr?: string) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet. Send /register to start.', chatId);
+        return;
+    }
+
+    if (!customAddr) {
+        user.workMode = 'OFFICE';
+        await user.save();
+        await sendTelegramMessage(
+            `🏢 <b>Set Office Location</b>\n\n` +
+            `Please share your office GPS location pin 📍 or reply with your office address:\n` +
+            `Example: <code>/setoffice 210-211 altF Coworking, Sector 142, Noida</code>`,
+            chatId,
+            getLocationKeyboard()
+        );
+        return;
+    }
+
+    user.workMode = 'OFFICE';
+    user.officeGeoLocation = customAddr;
+    user.geoLocation = customAddr;
+    await user.save();
+
+    await sendTelegramMessage(
+        `🏢 <b>Office Location Updated Successfully!</b>\n\n` +
+        `<b>Address:</b> ${customAddr}\n` +
+        `<b>Work Mode:</b> 🏢 Office Active\n\n` +
+        `Future punches will now use this Office address.`,
+        chatId,
+        getInteractiveKeyboard(user)
+    );
+}
+
+async function handleExtendPunchOut(chatId: string, user: IUser | null, minutes: number) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
+        return;
+    }
+
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    if (user.outPunchExtensionDate !== todayStr) {
+        user.outPunchExtensionDate = todayStr;
+        user.outPunchExtensionMinutes = minutes;
+    } else {
+        user.outPunchExtensionMinutes = (user.outPunchExtensionMinutes || 0) + minutes;
+    }
+    await user.save();
+
+    const successMsg =
+        `⏳ <b>Shift Extended (+${minutes} mins)</b>\n\n` +
+        `Added <b>+${minutes} minutes</b> to today's working shift.\n` +
+        `• <b>Total Extension Today:</b> +${user.outPunchExtensionMinutes}m\n\n` +
+        `Automated Punch-Out will wait for your extended working hours to complete.`;
+
+    await sendTelegramMessage(successMsg, chatId, getInteractiveKeyboard(user));
+}
+
+async function handleSkipOutToday(chatId: string, user: IUser | null) {
+    if (!user || user.registrationState !== 'IDLE') {
+        await sendTelegramMessage('⚠️ You are not registered yet.', chatId);
+        return;
+    }
+
+    const now = new Date();
+    const istParts = getISTParts(now);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${istParts.year}-${pad(istParts.month)}-${pad(istParts.day)}`;
+
+    user.skipPunchOutDate = todayStr;
+    await user.save();
+
+    const msg =
+        `⏸️ <b>Punch-Out Paused for Today</b>\n\n` +
+        `Automated Punch-Out will be skipped for today (${todayStr}).\n` +
+        `You can still punch out manually at any time by sending /mark.`;
+
+    await sendTelegramMessage(msg, chatId, getInteractiveKeyboard(user));
 }
 
 async function handleSkipRequest(chatId: string) {
@@ -718,11 +1007,14 @@ async function handleStatusRequest(chatId: string, user?: IUser | null) {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const istString = `${istDate.getFullYear()}-${pad(istDate.getMonth() + 1)}-${pad(istDate.getDate())} ${pad(istDate.getHours())}:${pad(istDate.getMinutes())}:${pad(istDate.getSeconds())}`;
 
+    const workModeBadge = user?.workMode === 'WFH' ? '🏠 WFH (Home)' : '🏢 Office';
+
     const statusText =
         `ℹ️ <b>HROne Bot System Status</b>\n\n` +
         `<b>Current IST Time:</b> ${istString}\n` +
         `<b>Active Shift Mode:</b> Punch ${shiftMode} (${hour < 14 ? 'Before 2 PM' : 'After 2 PM'})\n` +
         `<b>Registered User:</b> ${user?.hrUsername || 'Not Linked'}\n` +
+        `<b>Work Mode:</b> ${workModeBadge}\n` +
         `<b>Auto-Punch:</b> ${user?.autoMarkEnabled ? 'Enabled 🟢' : 'Disabled 🔴'}\n` +
         `<b>Status:</b> Engine Operational 🟢`;
 
@@ -814,6 +1106,11 @@ async function handleHelpRequest(chatId: string, user?: IUser | null) {
         `❓ <b>HROne Bot Help & User Guide</b>\n\n` +
         `<b>Available Bot Commands:</b>\n` +
         `• /mark - Punch attendance (Auto In/Out based on 9-hr rule)\n` +
+        `• /workmode - Toggle between Office and WFH mode\n` +
+        `• /wfh or /office - Switch mode directly\n` +
+        `• /setwfh &lt;address&gt; - Update your WFH/home address\n` +
+        `• /setoffice &lt;address&gt; - Update your office address\n` +
+        `• /extend &lt;mins&gt; - Extend today's shift (e.g. /extend 30)\n` +
         `• /history - Open 1–31 day calendar date picker\n` +
         `• /myhistory - View your MongoDB audit punch logs\n` +
         `• /stats - View monthly attendance analytics & hours\n` +
@@ -822,10 +1119,10 @@ async function handleHelpRequest(chatId: string, user?: IUser | null) {
         `• /updatelocation - Change custom GPS work location\n` +
         `• /updatecreds - Update HRone username & password\n` +
         `• /unregister - Delete profile from bot\n\n` +
-        `⏰ <b>9-Hour Working Shift Rule:</b>\n` +
+        `⏰ <b>Smart 9-Hour Shift Rule:</b>\n` +
         `• First punch of the day is automatically recorded as <b>Check-In</b>.\n` +
-        `• <b>Punch Out</b> is only permitted after <b>9 working hours</b> have passed since Check-In.\n` +
-        `• If you have already Punched Out in DB today, automated cron punches skip gracefully.\n\n` +
+        `• <b>Punch Out</b> requires at least <b>9 working hours</b> (plus any requested shift extensions).\n` +
+        `• If you have already Punched Out today, automated cron punches skip gracefully.\n\n` +
         `Tap any interactive button below to navigate:`;
 
     await sendTelegramMessage(helpText, chatId, getInteractiveKeyboard(user));
@@ -870,6 +1167,10 @@ function getInteractiveKeyboard(user?: IUser | null) {
         };
     }
 
+    const workModeBtn = user.workMode === 'WFH'
+        ? { text: '🏠 Mode: WFH (Switch to 🏢)', callback_data: 'action_toggle_workmode' }
+        : { text: '🏢 Mode: Office (Switch to 🏠)', callback_data: 'action_toggle_workmode' };
+
     return {
         inline_keyboard: [
             [
@@ -877,15 +1178,18 @@ function getInteractiveKeyboard(user?: IUser | null) {
                 { text: '📊 Today Logs', callback_data: 'action_history' }
             ],
             [
+                workModeBtn,
+                { text: '⚙️ Settings', callback_data: 'action_settings' }
+            ],
+            [
                 { text: '📅 Select Day (1 - 31)', callback_data: 'action_pick_date' },
                 { text: '💾 DB Punch Logs', callback_data: 'action_myhistory' }
             ],
             [
                 { text: '📈 Monthly Stats', callback_data: 'action_monthly_stats' },
-                { text: '⚙️ Settings', callback_data: 'action_settings' }
+                { text: user.autoMarkEnabled ? '⏸️ Auto-Punch: On' : '▶️ Auto-Punch: Off', callback_data: 'action_toggle_auto' }
             ],
             [
-                { text: user.autoMarkEnabled ? '⏸️ Disable Auto-Punch' : '▶️ Enable Auto-Punch', callback_data: 'action_toggle_auto' },
                 { text: '❓ Help & Guide', callback_data: 'action_help' }
             ]
         ]
