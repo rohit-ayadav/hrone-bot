@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Office Environments Hub - Dev, QA, Prod Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #030712;
+      --card-bg: rgba(17, 24, 39, 0.75);
+      --card-border: rgba(31, 41, 55, 0.85);
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --cyan: #06b6d4;
+      --cyan-light: #22d3ee;
+      --cyan-dim: rgba(6, 182, 212, 0.15);
+      --dev-color: #38bdf8;
+      --dev-bg: rgba(56, 189, 248, 0.12);
+      --dev-border: rgba(56, 189, 248, 0.3);
+      --qa-color: #fbbf24;
+      --qa-bg: rgba(251, 191, 36, 0.12);
+      --qa-border: rgba(251, 191, 36, 0.3);
+      --prod-color: #34d399;
+      --prod-bg: rgba(52, 211, 153, 0.12);
+      --prod-border: rgba(52, 211, 153, 0.3);
+      --rose: #fb7185;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      min-height: 100vh;
+      overflow-x: hidden;
+      padding-bottom: 60px;
+    }
+
+    /* Ambient glow */
+    .glow-1 {
+      position: fixed;
+      top: -100px;
+      left: -100px;
+      width: 450px;
+      height: 450px;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow-2 {
+      position: fixed;
+      top: 30%;
+      right: -150px;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow-3 {
+      position: fixed;
+      bottom: -100px;
+      left: 30%;
+      width: 450px;
+      height: 450px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      position: relative;
+      z-index: 10;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 24px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid rgba(31, 41, 55, 0.8);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #06b6d4, #2563eb);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 25px -5px rgba(6, 182, 212, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .brand-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      letter-spacing: -0.02em;
+    }
+
+    .badge-count {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--cyan-dim);
+      color: var(--cyan-light);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      font-weight: 600;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      border: 1px solid transparent;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: #06b6d4;
+      color: #030712;
+      box-shadow: 0 4px 14px 0 rgba(6, 182, 212, 0.3);
+    }
+    .btn-primary:hover {
+      background: #22d3ee;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(17, 24, 39, 0.8);
+      color: var(--text-main);
+      border-color: rgba(55, 65, 81, 0.8);
+    }
+    .btn-secondary:hover {
+      background: rgba(31, 41, 55, 0.8);
+      border-color: rgba(75, 85, 99, 1);
+    }
+
+    .btn-link {
+      background: transparent;
+      color: var(--text-muted);
+      text-decoration: underline;
+      padding: 6px 8px;
+    }
+    .btn-link:hover {
+      color: #fff;
+    }
+
+    /* Filter & Search Bar */
+    .controls-panel {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      border-radius: 18px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+
+    .controls-row-top {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .search-box {
+      flex: 1;
+      position: relative;
+      min-width: 260px;
+    }
+
+    .search-input {
+      width: 100%;
+      background: rgba(3, 7, 18, 0.85);
+      border: 1px solid rgba(55, 65, 81, 0.8);
+      border-radius: 12px;
+      padding: 10px 14px 10px 38px;
+      font-size: 13px;
+      color: #fff;
+      font-family: inherit;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .search-input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2);
+    }
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      color: var(--text-dim);
+    }
+
+    .kbd-shortcut {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      background: rgba(31, 41, 55, 0.6);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(55, 65, 81, 0.6);
+    }
+
+    .env-toggle-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(3, 7, 18, 0.85);
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid rgba(31, 41, 55, 0.8);
+    }
+
+    .env-toggle-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .env-toggle-btn.active-all {
+      background: rgba(55, 65, 81, 0.8);
+      color: #fff;
+    }
+    .env-toggle-btn.active-dev {
+      background: var(--dev-color);
+      color: #030712;
+    }
+    .env-toggle-btn.active-qa {
+      background: var(--qa-color);
+      color: #030712;
+    }
+    .env-toggle-btn.active-prod {
+      background: var(--rose);
+      color: #fff;
+    }
+
+    .controls-row-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-top: 10px;
+      border-top: 1px solid rgba(31, 41, 55, 0.8);
+    }
+
+    .category-chips {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+    }
+
+    .chip {
+      background: rgba(31, 41, 55, 0.4);
+      color: var(--text-muted);
+      border: 1px solid rgba(31, 41, 55, 0.8);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .chip:hover {
+      background: rgba(55, 65, 81, 0.6);
+      color: #fff;
+    }
+    .chip.active {
+      background: var(--cyan-dim);
+      color: var(--cyan-light);
+      border-color: rgba(6, 182, 212, 0.4);
+      font-weight: 600;
+    }
+
+    .batch-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* Cards Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.6);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .card:hover {
+      border-color: rgba(75, 85, 99, 1);
+      box-shadow: 0 16px 30px -10px rgba(0, 0, 0, 0.5), 0 0 25px -10px rgba(6, 182, 212, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .card-title-wrap {
+      flex: 1;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.3;
+    }
+
+    .meta-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .cat-tag {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      background: rgba(31, 41, 55, 0.8);
+      border: 1px solid rgba(55, 65, 81, 0.7);
+      border-radius: 6px;
+      color: #d1d5db;
+    }
+
+    .tech-tag {
+      font-size: 9px;
+      font-weight: 500;
+      padding: 1px 5px;
+      background: rgba(3, 7, 18, 0.6);
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      border-radius: 4px;
+      color: var(--text-dim);
+    }
+
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      padding: 6px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .icon-btn:hover {
+      background: rgba(31, 41, 55, 0.8);
+      color: #fff;
+    }
+    .icon-btn.danger:hover {
+      color: var(--rose);
+    }
+
+    .card-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    /* Environment Rows */
+    .env-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(31, 41, 55, 0.7);
+    }
+
+    .env-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(31, 41, 55, 0.8);
+      background: rgba(3, 7, 18, 0.6);
+      transition: all 0.2s;
+    }
+    .env-row:hover {
+      border-color: rgba(75, 85, 99, 0.9);
+      background: rgba(3, 7, 18, 0.9);
+    }
+
+    .env-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .env-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      flex-shrink: 0;
+    }
+    .env-badge.dev {
+      background: var(--dev-bg);
+      color: var(--dev-color);
+      border: 1px solid var(--dev-border);
+    }
+    .env-badge.qa {
+      background: var(--qa-bg);
+      color: var(--qa-color);
+      border: 1px solid var(--qa-border);
+    }
+    .env-badge.prod {
+      background: var(--prod-bg);
+      color: var(--prod-color);
+      border: 1px solid var(--prod-border);
+    }
+
+    .env-url {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #d1d5db;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .env-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .btn-open {
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 8px;
+      color: #030712;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+    .btn-open.dev { background: var(--dev-color); }
+    .btn-open.dev:hover { background: #7dd3fc; }
+    .btn-open.qa { background: var(--qa-color); }
+    .btn-open.qa:hover { background: #fde047; }
+    .btn-open.prod { background: var(--prod-color); }
+    .btn-open.prod:hover { background: #6ee7b7; }
+
+    .btn-copy {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      padding: 5px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+    }
+    .btn-copy:hover {
+      background: rgba(31, 41, 55, 0.8);
+      color: #fff;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 7, 18, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .modal-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal {
+      background: #111827;
+      border: 1px solid rgba(55, 65, 81, 0.8);
+      border-radius: 20px;
+      width: 100%;
+      max-width: 520px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 24px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      transform: scale(0.95);
+      transition: transform 0.2s ease;
+    }
+    .modal-backdrop.open .modal {
+      transform: scale(1);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid rgba(31, 41, 55, 0.8);
+    }
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #d1d5db;
+      margin-bottom: 6px;
+    }
+    .form-label span.req {
+      color: var(--rose);
+    }
+    .form-input, .form-select {
+      width: 100%;
+      background: rgba(3, 7, 18, 0.9);
+      border: 1px solid rgba(55, 65, 81, 0.8);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 12px;
+      color: #fff;
+      font-family: inherit;
+      outline: none;
+    }
+    .form-input:focus, .form-select:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+    .form-input.font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      padding-top: 18px;
+      margin-top: 20px;
+      border-top: 1px solid rgba(31, 41, 55, 0.8);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      background: #064e3b;
+      color: #a7f3d0;
+      border: 1px solid rgba(5, 150, 105, 0.6);
+      padding: 10px 18px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      z-index: 200;
+      transform: translateY(-20px);
+      opacity: 0;
+      transition: all 0.25s ease;
+      pointer-events: none;
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    /* Empty state */
+    .empty-state {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 60px 20px;
+      background: rgba(17, 24, 39, 0.4);
+      border: 2px dashed rgba(31, 41, 55, 0.8);
+      border-radius: 20px;
+    }
+    .empty-state h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: #fff;
+    }
+    .empty-state p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-1"></div>
+  <div class="glow-2"></div>
+  <div class="glow-3"></div>
+
+  <div id="toast" class="toast">Action completed successfully</div>
+
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">
+            <span>Office Environments Hub</span>
+            <span id="badge-count" class="badge-count">12 Services &bull; 36 URLs</span>
+          </div>
+          <p class="brand-subtitle">Centralized Dev, QA, and Production switcher for all office web services</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-add-service" class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          Add Website
+        </button>
+        <button id="btn-export" class="btn btn-secondary" title="Save backup JSON to disk">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export JSON
+        </button>
+        <label class="btn btn-secondary" style="cursor: pointer;" title="Import existing JSON file">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import JSON
+          <input type="file" id="input-import-file" accept=".json" style="display: none;" />
+        </label>
+        <button id="btn-reset" class="btn btn-link">Reset Defaults</button>
+      </div>
+    </header>
+
+    <!-- Filter & Search Controls -->
+    <div class="controls-panel">
+      <div class="controls-row-top">
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="search-input" class="search-input" placeholder="Search service name, URL, tags (Ctrl+K or /)..." />
+          <span class="kbd-shortcut">Ctrl+K</span>
+        </div>
+
+        <div class="env-toggle-group">
+          <span style="font-size: 11px; font-weight: 600; color: var(--text-dim); padding: 0 8px;">Focus:</span>
+          <button class="env-toggle-btn active-all" data-env="All">All</button>
+          <button class="env-toggle-btn" data-env="DEV">DEV</button>
+          <button class="env-toggle-btn" data-env="QA">QA</button>
+          <button class="env-toggle-btn" data-env="PROD">PROD</button>
+        </div>
+      </div>
+
+      <div class="controls-row-bottom">
+        <div id="category-chips" class="category-chips">
+          <!-- Dynamic Chips -->
+        </div>
+
+        <div class="batch-actions">
+          <span>Batch Launch:</span>
+          <button id="btn-batch-dev" class="btn btn-secondary" style="font-size: 11px; padding: 4px 10px; color: var(--dev-color);">Launch Devs</button>
+          <button id="btn-batch-qa" class="btn btn-secondary" style="font-size: 11px; padding: 4px 10px; color: var(--qa-color);">Launch QAs</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cards Container -->
+    <div id="services-grid" class="grid"></div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div id="service-modal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title" class="modal-title">Add Website / Service</h3>
+        <button id="btn-modal-close" class="icon-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+
+      <form id="service-form">
+        <input type="hidden" id="form-service-id" />
+        <div class="form-group">
+          <label class="form-label">Website / Service Name <span class="req">*</span></label>
+          <input type="text" id="form-name" class="form-input" required placeholder="e.g. Customer Website, DIT CMS Service" />
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;" class="form-group">
+          <div>
+            <label class="form-label">Category</label>
+            <select id="form-category" class="form-select">
+              <option value="Web Apps">Web Apps</option>
+              <option value="APIs & Services">APIs & Services</option>
+              <option value="Admin & Ops">Admin & Ops</option>
+              <option value="Tools & Infrastructure">Tools & Infrastructure</option>
+              <option value="Vendors / External">Vendors / External</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Tags (comma separated)</label>
+            <input type="text" id="form-tags" class="form-input" placeholder="React, API, CMS" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description / Notes</label>
+          <input type="text" id="form-desc" class="form-input" placeholder="e.g. Consumer frontend, test login credentials" />
+        </div>
+
+        <div style="padding-top: 10px; border-top: 1px solid rgba(31, 41, 55, 0.8);">
+          <div class="form-group">
+            <label class="form-label" style="color: var(--dev-color);">DEV URL</label>
+            <input type="text" id="form-dev" class="form-input font-mono" placeholder="https://dev-customer.company.internal" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="color: var(--qa-color);">QA / Staging URL</label>
+            <input type="text" id="form-qa" class="form-input font-mono" placeholder="https://qa-customer.company.internal" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="color: var(--prod-color);">Production (PROD) URL</label>
+            <input type="text" id="form-prod" class="form-input font-mono" placeholder="https://customer.mycompany.com" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Localhost URL (Optional)</label>
+            <input type="text" id="form-local" class="form-input font-mono" placeholder="http://localhost:3000" />
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" id="btn-modal-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Website</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'office_environments_hub_standalone_v1';
+
+    const INITIAL_SERVICES = [
+      // --- DIT Core Operations ---
+      {
+        id: 'dit-admin',
+        name: 'DIT Admin Portal',
+        category: 'Admin & Ops',
+        description: 'DeliverIt primary backoffice operations, sales collections & settings',
+        devUrl: 'https://admin-dev.deliverit.net.in/',
+        qaUrl: 'https://admin-qa.deliverit.net.in/',
+        prodUrl: 'https://admin.deliverit.net.in/',
+        tags: ['DIT', 'Admin', 'Operations']
+      },
+      {
+        id: 'dit-user-mgmt',
+        name: 'DIT User Management',
+        category: 'Auth & Security',
+        description: 'DeliverIt user management, role privileges & RBAC portal',
+        devUrl: 'https://proud-cliff-0c52a6d00.7.azurestaticapps.net/',
+        qaUrl: 'https://calm-hill-0ed8b5a00.7.azurestaticapps.net/',
+        prodUrl: 'https://happy-field-03bca1c00.7.azurestaticapps.net/',
+        tags: ['DIT', 'User Management', 'Roles', 'Azure']
+      },
+      {
+        id: 'dit-routing',
+        name: 'DIT Routing (Lumi)',
+        category: 'Logistics & Ops',
+        description: 'DeliverIt dispatch, order routing, and delivery fleet optimization',
+        devUrl: '',
+        qaUrl: 'https://ambitious-mushroom-0d5772d00.7.azurestaticapps.net/',
+        prodUrl: 'https://lumi.deliverit.net.in/',
+        tags: ['DIT', 'Routing', 'Lumi', 'Dispatch']
+      },
+      {
+        id: 'dit-customer',
+        name: 'DIT Customer Web',
+        category: 'Web Apps',
+        description: 'DeliverIt consumer store and customer web portal',
+        devUrl: 'https://customer-dev.deliverit.net.in/',
+        qaUrl: 'https://customer-qa.deliverit.net.in/',
+        prodUrl: '',
+        tags: ['DIT', 'Customer', 'Frontend']
+      },
+      {
+        id: 'dit-sales',
+        name: 'DIT Sales App',
+        category: 'Sales & Marketing',
+        description: 'DeliverIt sales partner app & agent catalog interface',
+        devUrl: '',
+        qaUrl: 'https://blue-moss-031c76000.3.azurestaticapps.net/',
+        prodUrl: '',
+        tags: ['DIT', 'Sales', 'Partners']
+      },
+      {
+        id: 'dit-wms',
+        name: 'DIT WMS (Warehouse)',
+        category: 'Logistics & Ops',
+        description: 'DeliverIt warehouse management dashboard, inventory & pick-pack',
+        devUrl: '',
+        qaUrl: 'https://salmon-desert-0c66c7300.7.azurestaticapps.net/',
+        prodUrl: '',
+        tags: ['DIT', 'WMS', 'Warehouse']
+      },
+      {
+        id: 'robotics-user-mgmt',
+        name: 'Robotics User Management',
+        category: 'Auth & Security',
+        description: 'Robotics automation fleet & hardware access management',
+        devUrl: 'https://thankful-grass-0e5d65800.6.azurestaticapps.net/',
+        qaUrl: '',
+        prodUrl: '',
+        tags: ['Robotics', 'Automation', 'Users']
+      },
+
+      // --- UH Platform (UHarvest) ---
+      {
+        id: 'uh-admin',
+        name: 'UH Admin Portal',
+        category: 'UH Platform',
+        description: 'UHarvest backoffice system settings & central management',
+        devUrl: '',
+        qaUrl: '',
+        prodUrl: 'https://admin.uharvest.in/',
+        tags: ['UH', 'UHarvest', 'Admin']
+      },
+      {
+        id: 'uh-routing',
+        name: 'UH Routing (Lumi UH)',
+        category: 'UH Platform',
+        description: 'UHarvest route assignment and dispatch management',
+        devUrl: '',
+        qaUrl: '',
+        prodUrl: 'https://lumi-uh.uharvest.in/',
+        tags: ['UH', 'Routing', 'Lumi']
+      },
+      {
+        id: 'uh-sales',
+        name: 'UH Sales Partner App',
+        category: 'UH Platform',
+        description: 'UHarvest sales partner and field merchant app',
+        devUrl: '',
+        qaUrl: '',
+        prodUrl: 'https://sales-partner.uharvest.in/',
+        tags: ['UH', 'Sales', 'Partners']
+      },
+      {
+        id: 'uh-user-mgmt',
+        name: 'UH User Management',
+        category: 'UH Platform',
+        description: 'UHarvest employee and merchant identity role management',
+        devUrl: '',
+        qaUrl: '',
+        prodUrl: 'https://proud-meadow-008ca6000.7.azurestaticapps.net/',
+        tags: ['UH', 'User Management', 'Roles']
+      },
+
+      // --- Keycloak & Identity Services ---
+      {
+        id: 'dit-keycloak',
+        name: 'DIT Keycloak',
+        category: 'Auth & Security',
+        description: 'Keycloak SSO, OAuth2/OIDC identity realm tokens for DIT platform',
+        devUrl: 'https://dit-identity-dev.victorioussky-c561900e.centralindia.azurecontainerapps.io/',
+        qaUrl: 'https://identity-service-qa.happyrock-1236a00b.centralindia.azurecontainerapps.io/',
+        prodUrl: 'https://dit-identity-production.yellowbeach-a8e8372c.centralindia.azurecontainerapps.io/',
+        localUrl: 'http://localhost:8080',
+        tags: ['Keycloak', 'Identity', 'Azure', 'SSO']
+      },
+      {
+        id: 'uh-identity',
+        name: 'UH Identity (Keycloak)',
+        category: 'Auth & Security',
+        description: 'UH Identity OpenID Connect & security admin console',
+        devUrl: 'https://uh-identity-dev.victorioussky-c561900e.centralindia.azurecontainerapps.io/',
+        qaUrl: 'https://uh-identity-qa.happyrock-1236a00b.centralindia.azurecontainerapps.io/',
+        prodUrl: 'https://uh-identity-production.bravedesert-38b8e25e.centralindia.azurecontainerapps.io/',
+        localUrl: 'http://localhost:8082',
+        tags: ['Keycloak', 'UH', 'Identity', 'Azure', 'SSO']
+      },
+      {
+        id: 'external-identity',
+        name: 'External Identity (Keycloak)',
+        category: 'Auth & Security',
+        description: 'External Keycloak Identity & WMS Worker security admin console',
+        devUrl: 'https://external-identity-dev.victorioussky-c561900e.centralindia.azurecontainerapps.io/',
+        qaUrl: 'https://external-identity-qa.happyrock-1236a00b.centralindia.azurecontainerapps.io/',
+        prodUrl: '',
+        localUrl: 'http://localhost:8081',
+        tags: ['Keycloak', 'External', 'Identity', 'Azure', 'WMS']
+      }
+    ];
+
+    let services = [];
+    let activeEnvFilter = 'All';
+    let activeCategory = 'All';
+    let searchQuery = '';
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function loadServices() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            services = parsed;
+            render();
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Error loading services:', e);
+      }
+      services = [...INITIAL_SERVICES];
+      saveServices();
+      render();
+    }
+
+    function saveServices() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(services));
+      updateCountBadge();
+    }
+
+    function updateCountBadge() {
+      let urlsCount = 0;
+      services.forEach(s => {
+        if (s.devUrl) urlsCount++;
+        if (s.qaUrl) urlsCount++;
+        if (s.prodUrl) urlsCount++;
+        if (s.localUrl) urlsCount++;
+      });
+      document.getElementById('badge-count').textContent = `${services.length} Services • ${urlsCount} URLs`;
+    }
+
+    function renderCategories() {
+      const cats = new Set(['All']);
+      services.forEach(s => { if (s.category) cats.add(s.category); });
+      const container = document.getElementById('category-chips');
+      container.innerHTML = '';
+
+      cats.forEach(c => {
+        const btn = document.createElement('button');
+        btn.className = `chip ${activeCategory === c ? 'active' : ''}`;
+        btn.textContent = c;
+        btn.onclick = () => {
+          activeCategory = c;
+          renderCategories();
+          renderCards();
+        };
+        container.appendChild(btn);
+      });
+    }
+
+    function renderCards() {
+      const grid = document.getElementById('services-grid');
+      const filtered = services.filter(s => {
+        if (activeCategory !== 'All' && s.category !== activeCategory) return false;
+        if (activeEnvFilter === 'DEV' && !s.devUrl) return false;
+        if (activeEnvFilter === 'QA' && !s.qaUrl) return false;
+        if (activeEnvFilter === 'PROD' && !s.prodUrl) return false;
+
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matchName = s.name.toLowerCase().includes(q);
+          const matchDesc = (s.description || '').toLowerCase().includes(q);
+          const matchDev = (s.devUrl || '').toLowerCase().includes(q);
+          const matchQa = (s.qaUrl || '').toLowerCase().includes(q);
+          const matchProd = (s.prodUrl || '').toLowerCase().includes(q);
+          const matchTags = (s.tags || []).some(t => t.toLowerCase().includes(q));
+          return matchName || matchDesc || matchDev || matchQa || matchProd || matchTags;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = `
+          <div class="empty-state">
+            <h3>No Websites Found</h3>
+            <p>Try searching for a different keyword or change your filter.</p>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = filtered.map(s => `
+        <div class="card">
+          <div>
+            <div class="card-header">
+              <div class="card-title-wrap">
+                <div class="card-title">${escapeHtml(s.name)}</div>
+                <div class="meta-row">
+                  <span class="cat-tag">${escapeHtml(s.category)}</span>
+                  ${(s.tags || []).slice(0, 2).map(t => `<span class="tech-tag">#${escapeHtml(t)}</span>`).join('')}
+                </div>
+              </div>
+              <div class="card-actions">
+                <button class="icon-btn" onclick="editService('${s.id}')" title="Edit Website">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+                <button class="icon-btn danger" onclick="deleteService('${s.id}')" title="Delete Website">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </div>
+            </div>
+            ${s.description ? `<p class="card-desc">${escapeHtml(s.description)}</p>` : ''}
+          </div>
+
+          <div class="env-rows">
+            ${s.devUrl ? `
+              <div class="env-row">
+                <div class="env-info">
+                  <span class="env-badge dev">DEV</span>
+                  <span class="env-url" title="${escapeHtml(s.devUrl)}">${formatCleanUrl(s.devUrl)}</span>
+                </div>
+                <div class="env-actions">
+                  <button class="btn-copy" onclick="copyUrl('${escapeHtml(s.devUrl)}')" title="Copy URL">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                  <a href="${s.devUrl}" target="_blank" rel="noopener noreferrer" class="btn-open dev">Open</a>
+                </div>
+              </div>
+            ` : ''}
+
+            ${s.qaUrl ? `
+              <div class="env-row">
+                <div class="env-info">
+                  <span class="env-badge qa">QA</span>
+                  <span class="env-url" title="${escapeHtml(s.qaUrl)}">${formatCleanUrl(s.qaUrl)}</span>
+                </div>
+                <div class="env-actions">
+                  <button class="btn-copy" onclick="copyUrl('${escapeHtml(s.qaUrl)}')" title="Copy URL">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                  <a href="${s.qaUrl}" target="_blank" rel="noopener noreferrer" class="btn-open qa">Open</a>
+                </div>
+              </div>
+            ` : ''}
+
+            ${s.prodUrl ? `
+              <div class="env-row">
+                <div class="env-info">
+                  <span class="env-badge prod">PROD</span>
+                  <span class="env-url" title="${escapeHtml(s.prodUrl)}">${formatCleanUrl(s.prodUrl)}</span>
+                </div>
+                <div class="env-actions">
+                  <button class="btn-copy" onclick="copyUrl('${escapeHtml(s.prodUrl)}')" title="Copy URL">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                  <a href="${s.prodUrl}" target="_blank" rel="noopener noreferrer" class="btn-open prod">Open</a>
+                </div>
+              </div>
+            ` : ''}
+
+            ${s.localUrl ? `
+              <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 2px 6px; color: var(--text-dim);">
+                <span>Local: ${escapeHtml(s.localUrl)}</span>
+                <a href="${s.localUrl}" target="_blank" rel="noopener noreferrer" style="color: var(--cyan); text-decoration: none;">Launch &rarr;</a>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function formatCleanUrl(url) {
+      return url.replace(/^https?:\/\//, '');
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function copyUrl(url) {
+      navigator.clipboard.writeText(url).then(() => {
+        showToast('Copied URL to clipboard!');
+      });
+    }
+
+    function render() {
+      updateCountBadge();
+      renderCategories();
+      renderCards();
+    }
+
+    // Modal logic
+    const modal = document.getElementById('service-modal');
+    const form = document.getElementById('service-form');
+
+    function openAddModal() {
+      document.getElementById('modal-title').textContent = 'Add Website / Service';
+      form.reset();
+      document.getElementById('form-service-id').value = '';
+      modal.classList.add('open');
+      document.getElementById('form-name').focus();
+    }
+
+    function closeModal() {
+      modal.classList.remove('open');
+    }
+
+    function editService(id) {
+      const svc = services.find(s => s.id === id);
+      if (!svc) return;
+
+      document.getElementById('modal-title').textContent = 'Edit Website / Service';
+      document.getElementById('form-service-id').value = svc.id;
+      document.getElementById('form-name').value = svc.name;
+      document.getElementById('form-category').value = svc.category || 'Web Apps';
+      document.getElementById('form-tags').value = (svc.tags || []).join(', ');
+      document.getElementById('form-desc').value = svc.description || '';
+      document.getElementById('form-dev').value = svc.devUrl || '';
+      document.getElementById('form-qa').value = svc.qaUrl || '';
+      document.getElementById('form-prod').value = svc.prodUrl || '';
+      document.getElementById('form-local').value = svc.localUrl || '';
+
+      modal.classList.add('open');
+      document.getElementById('form-name').focus();
+    }
+
+    function deleteService(id) {
+      const svc = services.find(s => s.id === id);
+      if (confirm(`Are you sure you want to remove "${svc.name}"?`)) {
+        services = services.filter(s => s.id !== id);
+        saveServices();
+        render();
+        showToast(`Removed "${svc.name}"`);
+      }
+    }
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const id = document.getElementById('form-service-id').value;
+      const tags = document.getElementById('form-tags').value
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
+      const serviceData = {
+        name: document.getElementById('form-name').value.trim(),
+        category: document.getElementById('form-category').value,
+        description: document.getElementById('form-desc').value.trim(),
+        devUrl: document.getElementById('form-dev').value.trim(),
+        qaUrl: document.getElementById('form-qa').value.trim(),
+        prodUrl: document.getElementById('form-prod').value.trim(),
+        localUrl: document.getElementById('form-local').value.trim(),
+        tags: tags
+      };
+
+      if (id) {
+        services = services.map(s => s.id === id ? { ...s, ...serviceData } : s);
+        showToast('Updated website successfully');
+      } else {
+        const newService = {
+          id: 'svc-' + Date.now(),
+          ...serviceData
+        };
+        services.unshift(newService);
+        showToast('Added website to portal');
+      }
+
+      saveServices();
+      render();
+      closeModal();
+    };
+
+    // Event listeners
+    document.getElementById('btn-add-service').onclick = openAddModal;
+    document.getElementById('btn-modal-close').onclick = closeModal;
+    document.getElementById('btn-modal-cancel').onclick = closeModal;
+
+    modal.onclick = (e) => {
+      if (e.target === modal) closeModal();
+    };
+
+    document.getElementById('search-input').oninput = (e) => {
+      searchQuery = e.target.value;
+      renderCards();
+    };
+
+    // Keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        document.getElementById('search-input').focus();
+      }
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Environment focus buttons
+    document.querySelectorAll('.env-toggle-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.env-toggle-btn').forEach(b => {
+          b.className = 'env-toggle-btn';
+        });
+        const env = btn.dataset.env;
+        activeEnvFilter = env;
+        if (env === 'All') btn.classList.add('active-all');
+        if (env === 'DEV') btn.classList.add('active-dev');
+        if (env === 'QA') btn.classList.add('active-qa');
+        if (env === 'PROD') btn.classList.add('active-prod');
+        renderCards();
+      };
+    });
+
+    // Batch Open
+    document.getElementById('btn-batch-dev').onclick = () => {
+      const urls = services.filter(s => s.devUrl).map(s => s.devUrl);
+      if (confirm(`Open ${urls.length} DEV websites in new tabs?`)) {
+        urls.forEach(u => window.open(u, '_blank'));
+      }
+    };
+
+    document.getElementById('btn-batch-qa').onclick = () => {
+      const urls = services.filter(s => s.qaUrl).map(s => s.qaUrl);
+      if (confirm(`Open ${urls.length} QA websites in new tabs?`)) {
+        urls.forEach(u => window.open(u, '_blank'));
+      }
+    };
+
+    // Export / Import
+    document.getElementById('btn-export').onclick = () => {
+      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(services, null, 2));
+      const a = document.createElement('a');
+      a.href = dataStr;
+      a.download = `office-environments-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('Exported environments configuration!');
+    };
+
+    document.getElementById('input-import-file').onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            services = parsed;
+            saveServices();
+            render();
+            showToast(`Imported ${parsed.length} services!`);
+          } else {
+            alert('Invalid JSON file format.');
+          }
+        } catch (err) {
+          alert('Failed to read JSON file.');
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    document.getElementById('btn-reset').onclick = () => {
+      if (confirm('Reset back to factory defaults? Your custom changes will be replaced.')) {
+        services = [...INITIAL_SERVICES];
+        saveServices();
+        render();
+        showToast('Reset to defaults');
+      }
+    };
+
+    // Init
+    loadServices();
+  </script>
+</body>
+</html>

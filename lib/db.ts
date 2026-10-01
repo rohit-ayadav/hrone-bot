@@ -1,4 +1,12 @@
 import mongoose from 'mongoose';
+import dns from 'dns';
+
+// Fix Windows DNS SRV lookup for MongoDB Atlas cluster
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (e) {
+  // Ignore in environments where setServers is restricted
+}
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
